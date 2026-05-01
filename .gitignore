@@ -1,0 +1,25 @@
+# Gradle
+.gradle/
+build/
+**/build/
+out/
+
+# Test artifacts
+work/
+test-results/
+tests/generated/
+.nextflow*
+.command*
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local Claude metadata
+.claude/
+CLAUDE.md

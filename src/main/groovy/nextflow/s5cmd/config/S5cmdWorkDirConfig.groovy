@@ -1,0 +1,86 @@
+/*
+ * Copyright 2026-, abc-cluster
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package nextflow.s5cmd.config
+
+import groovy.transform.CompileStatic
+import nextflow.util.Duration
+
+/**
+ * Configuration for using s5cmd as the distributed-workdir backend on
+ * Nomad workers (consumed by the {@code S5cmdNomadInterop} provider in
+ * nf-nomad). Controls where on the S3 endpoint task scratch goes.
+ *
+ * <pre>
+ * s5cmd {
+ *   workDir {
+ *     enabled    = true
+ *     bucket     = 's3://nextflow-work'
+ *     prefix     = 'sessions/<run-id>/'           // appended after bucket
+ *     completionTimeout = '60s'                   // max wait for remote .exitcode
+ *   }
+ * }
+ * </pre>
+ */
+@CompileStatic
+class S5cmdWorkDirConfig {
+
+    /** Master switch — when false, nf-nomad falls back to other providers / shared FS. */
+    boolean enabled = false
+
+    /** S3 URL of the bucket where session work-dirs live (e.g. {@code s3://nextflow-work}). */
+    String bucket
+
+    /** Optional prefix prepended to the per-task path inside the bucket. */
+    String prefix
+
+    /** How long to poll the remote {@code .exitcode} marker before giving up. */
+    Duration completionTimeout = Duration.of('60s')
+
+    static S5cmdWorkDirConfig fromMap(Map<String, Object> map) {
+        def cfg = new S5cmdWorkDirConfig()
+        if( map == null ) return cfg
+        if( map.containsKey('enabled') ) cfg.enabled = (boolean) map.enabled
+        if( map.containsKey('bucket') )  cfg.bucket  = ((String) map.bucket)?.trim() ?: null
+        if( map.containsKey('prefix') )  cfg.prefix  = ((String) map.prefix)?.trim() ?: null
+        if( map.containsKey('completionTimeout') ) {
+            cfg.completionTimeout = Duration.of(map.completionTimeout.toString())
+        }
+        return cfg
+    }
+
+    /** Validate cross-field invariants. Raises IllegalArgumentException on malformed input. */
+    void validate() {
+        if( !enabled ) return
+        if( !bucket ) {
+            throw new IllegalArgumentException(
+                'nf-s5cmd: workDir.enabled=true requires workDir.bucket (e.g. s3://my-bucket)')
+        }
+        if( !(bucket.startsWith('s3://') || bucket.startsWith('s3a://')) ) {
+            throw new IllegalArgumentException(
+                "nf-s5cmd: workDir.bucket must be an s3:// URL; got '${bucket}'")
+        }
+    }
+
+    /** Returns the canonical {@code s3://bucket/prefix/} root (always trailing-slashed). */
+    String rootUrl() {
+        if( !bucket ) return null
+        String b = bucket.endsWith('/') ? bucket : (bucket + '/')
+        if( !prefix ) return b
+        String p = prefix.startsWith('/') ? prefix.substring(1) : prefix
+        if( !p.endsWith('/') ) p = p + '/'
+        return b + p
+    }
+}

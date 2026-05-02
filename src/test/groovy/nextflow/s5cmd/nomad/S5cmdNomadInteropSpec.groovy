@@ -119,13 +119,27 @@ class S5cmdNomadInteropSpec extends Specification {
         !new S5cmdNomadInterop(mockTaskAt(tempDir.resolve('a/b/c')), enabledSession(), tempDir).isExternallyStaged()
     }
 
-    def 'createCopyStrategy returns null (bootstrap script handles staging)'() {
+    def 'createCopyStrategy returns an S5cmdFileCopyStrategy that emits stage-in s5cmd cp lines'() {
         given:
-        def interop = new S5cmdNomadInterop(mockTaskAt(tempDir.resolve('a/b/c')), enabledSession(), tempDir)
+        Path sessionDir = tempDir.resolve('sess')
+        Path workDir = sessionDir.resolve('ab').resolve('cdef1234')
+        Files.createDirectories(workDir)
+        def interop = new S5cmdNomadInterop(mockTaskAt(workDir), enabledSession(), sessionDir)
 
-        expect:
-        interop.createCopyStrategy(false) == null
-        interop.createCopyStrategy(true) == null
+        when:
+        def strategy = interop.createCopyStrategy(false)
+
+        then:
+        strategy != null
+        strategy.class.name == 'nextflow.s5cmd.strategy.S5cmdFileCopyStrategy'
+
+        and: 'stage-in script pulls each input from the per-task remote inputs/ dir'
+        def stageIn = strategy.getStageInputFilesScript([
+            'reads.fq': Path.of('/local/data/reads.fq')
+        ])
+        stageIn.contains('s5cmd')
+        stageIn.contains("'s3://nextflow-work/sessions/abc/ab/cdef1234/inputs/reads.fq'")
+        stageIn.contains("'./reads.fq'")
     }
 
     def 'getLifecycleTasks is always empty in bootstrap mode'() {
@@ -213,7 +227,7 @@ class S5cmdNomadInteropSpec extends Specification {
         interop.submitCommand.size() == 3
         interop.submitCommand[0] == 'bash'
         interop.submitCommand[1] == '-c'
-        interop.submitCommand[2].startsWith('set -euo pipefail')
+        interop.submitCommand[2].startsWith('set -uo pipefail')
     }
 
     def 'prepare() uploads .command.* to the remote task dir via s5cmd cp'() {
@@ -276,7 +290,7 @@ class S5cmdNomadInteropSpec extends Specification {
         String script = interop.submitCommand[2]
 
         then: 'pulls .command.* from the remote workdir'
-        script.contains("s5cmd cp '\$\${NXF_S5CMD_REMOTE_WORKDIR}.command.*' ./")
+        script.contains('s5cmd cp "$${NXF_S5CMD_REMOTE_WORKDIR}.command.*" ./')
 
         and: 'writes the local exit code marker'
         script.contains("printf '%s' \"\$_exit_code\" > .exitcode")
@@ -301,7 +315,7 @@ class S5cmdNomadInteropSpec extends Specification {
         String script = interop.submitCommand[2]
 
         then:
-        script.contains("/custom/bin/s5cmd cp '\$\${NXF_S5CMD_REMOTE_WORKDIR}.command.*' ./")
+        script.contains('/custom/bin/s5cmd cp "$${NXF_S5CMD_REMOTE_WORKDIR}.command.*" ./')
     }
 
     // ── env exports ───────────────────────────────────────────────────────
@@ -342,6 +356,34 @@ class S5cmdNomadInteropSpec extends Specification {
 
         then:
         interop.submitEnv['AWS_PROFILE'] == 'cluster-dev'
+    }
+
+    // ── session-level bin dedupe ──────────────────────────────────────────
+
+    def 'sessionBinRoot uses workDir root + _nxf-bin + sessionId so multiple sessions cannot collide'() {
+        given:
+        Path sessionDir = tempDir.resolve('sess')
+        Path workDir = makeNfTask(sessionDir)
+        def interop = new StubInterop(mockTaskAt(workDir), enabledSession(), sessionDir)
+
+        expect: 'two distinct session ids produce distinct roots'
+        interop.sessionBinRoot('sess-A') == 's3://nextflow-work/sessions/abc/_nxf-bin/sess-A/'
+        interop.sessionBinRoot('sess-B') == 's3://nextflow-work/sessions/abc/_nxf-bin/sess-B/'
+        interop.sessionBinDirUrl('sess-A', 0) == 's3://nextflow-work/sessions/abc/_nxf-bin/sess-A/0/'
+    }
+
+    def 'submitEnv carries NXF_S5CMD_SESSION_BIN_DIR pointing at the session-level root'() {
+        given:
+        Path sessionDir = tempDir.resolve('sess')
+        Path workDir = makeNfTask(sessionDir)
+        def interop = new StubInterop(mockTaskAt(workDir), enabledSession(), sessionDir)
+
+        when:
+        interop.prepare()
+
+        then:
+        interop.submitEnv['NXF_S5CMD_SESSION_BIN_DIR'].startsWith('s3://nextflow-work/sessions/abc/_nxf-bin/')
+        interop.submitEnv['NXF_S5CMD_SESSION_BIN_DIR'].endsWith('/')
     }
 
     // ── synchronizeCompletion ─────────────────────────────────────────────

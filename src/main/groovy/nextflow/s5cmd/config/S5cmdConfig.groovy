@@ -65,7 +65,7 @@ import groovy.util.logging.Slf4j
 @CompileStatic
 class S5cmdConfig {
 
-    private static final Set<String> KNOWN_KEYS = ['enabled','binary','paths','s3','cp','workDir'] as Set
+    private static final Set<String> KNOWN_KEYS = ['enabled','binary','paths','publishPaths','s3','cp','workDir'] as Set
 
     /** Master switch — when false, the plugin loads but stays inactive. */
     boolean enabled = true
@@ -74,11 +74,26 @@ class S5cmdConfig {
     String binary = 's5cmd'
 
     /**
-     * Ordered list of S3 URL prefixes nf-s5cmd will handle. A path matches
-     * when it startsWith() any entry. Defaults to empty (plugin loads but
-     * matches nothing — useful for opt-in pipelines).
+     * Ordered list of S3 URL prefixes nf-s5cmd handles for INPUT staging.
+     * A path matches when it startsWith() any entry. Defaults to empty
+     * (plugin loads but matches nothing — useful for opt-in pipelines).
      */
     List<String> paths = []
+
+    /**
+     * Ordered list of S3 URL prefixes nf-s5cmd handles for OUTPUT publishing
+     * via {@code publishDir}. Separate from {@link #paths} on purpose:
+     * input staging and output publishing are independent decisions, and
+     * intercepting publishDir means co-existing with Nextflow's nf-amazon
+     * S3 client (which still does mkdir / list calls). Default empty —
+     * Nextflow's native publishDir-via-nf-amazon handles all s3:// targets.
+     *
+     * Set this only when you want s5cmd's worker-pool throughput for the
+     * actual file copies. The {@code aws { client { ... } }} config still
+     * needs to point nf-amazon at the same S3 endpoint so its mkdir/list
+     * calls succeed before our cp fires.
+     */
+    List<String> publishPaths = []
 
     /** S3 connection parameters. */
     S5cmdS3Config s3 = new S5cmdS3Config()
@@ -107,6 +122,9 @@ class S5cmdConfig {
 
         if( map.containsKey('paths') ) {
             cfg.paths = coercePathsList(map.paths)
+        }
+        if( map.containsKey('publishPaths') ) {
+            cfg.publishPaths = coercePathsList(map.publishPaths)
         }
         if( map.containsKey('s3') && map.s3 instanceof Map ) {
             cfg.s3 = S5cmdS3Config.fromMap((Map<String, Object>) map.s3)
@@ -141,6 +159,27 @@ class S5cmdConfig {
                     "nf-s5cmd: paths entries must begin with s3:// or s3a://; got '${p}'")
             }
         }
+        for( String p : publishPaths ) {
+            if( !p ) continue
+            if( !p.startsWith('s3://') && !p.startsWith('s3a://') ) {
+                throw new IllegalArgumentException(
+                    "nf-s5cmd: publishPaths entries must begin with s3:// or s3a://; got '${p}'")
+            }
+        }
+    }
+
+    /**
+     * Returns true when the given path is a publishDir target nf-s5cmd
+     * should intercept (matches a configured {@link #publishPaths} prefix).
+     * Distinct from {@link #matches} which governs input staging — output
+     * publishing is opt-in via a separate prefix list.
+     */
+    boolean matchesPublish(String path) {
+        if( !enabled || !path ) return false
+        for( String prefix : publishPaths ) {
+            if( prefix && path.startsWith(prefix) ) return true
+        }
+        return false
     }
 
     /**

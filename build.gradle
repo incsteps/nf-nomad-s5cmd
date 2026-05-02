@@ -18,7 +18,28 @@ plugins {
     id 'io.nextflow.nextflow-plugin' version '1.0.0-beta.10'
 }
 
+// nf-s5cmd registers a DistributedWorkdirProviderFactory @Extension on
+// nf-nomad's SPI. See the matching block in nf-rclone/build.gradle for the
+// rationale; this is a copy-paste of that wiring.
+def candidatePaths = [
+    file('../nf-nomad/build/libs'),
+    file('../nf-abc-cluster-dev/plugins/nf-nomad/build/libs'),
+]
+def nfNomadJar = candidatePaths
+        .findResult { dir ->
+            dir.exists()
+                ? dir.listFiles()?.find { it.name.startsWith('nf-nomad-') && it.name.endsWith('.jar') }
+                : null
+        }
+
 dependencies {
+    if (nfNomadJar) {
+        compileOnly files(nfNomadJar)
+        testCompileOnly files(nfNomadJar)
+        testRuntimeOnly files(nfNomadJar)
+    } else {
+        logger.warn "nf-s5cmd: could not find nf-nomad jar in any of ${candidatePaths*.path}; the DistributedWorkdirProvider SPI factory will fail to compile. Build nf-nomad first (e.g. `make bundle` in nf-abc-cluster-dev)."
+    }
 }
 
 sourceSets {
@@ -52,6 +73,10 @@ nextflowPlugin {
     provider = 'nf-s5cmd'
     className = 'nextflow.s5cmd.S5cmdPlugin'
     extensionPoints = [
-            'nextflow.s5cmd.observer.S5cmdTransferObserverFactory'
+            'nextflow.s5cmd.observer.S5cmdTransferObserverFactory',
+            'nextflow.s5cmd.nomad.S5cmdNomadInteropFactory'
     ]
+    // PF4J Plugin-Dependencies — wires nf-nomad's classloader as our parent
+    // so we can @Extension against nf-nomad's SPI.
+    requirePlugins = ['nf-nomad']
 }

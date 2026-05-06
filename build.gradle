@@ -18,9 +18,10 @@ plugins {
     id 'io.nextflow.nextflow-plugin' version '1.0.0-beta.10'
 }
 
-// nf-s5cmd registers a DistributedWorkdirProviderFactory @Extension on
-// nf-nomad's SPI. See the matching block in nf-rclone/build.gradle for the
-// rationale; this is a copy-paste of that wiring.
+// nf-nomad-s5cmd registers a DistributedWorkdirProviderFactory @Extension on
+// nf-nomad's SPI. The compileOnly link below brings in nf-nomad's SPI types
+// at compile time without bundling them into the plugin jar (PF4J wires the
+// runtime classloader at load time via the Plugin-Dependencies manifest).
 def candidatePaths = [
     file('../nf-nomad/build/libs'),
     file('../nf-abc-cluster-dev/plugins/nf-nomad/build/libs'),
@@ -38,7 +39,7 @@ dependencies {
         testCompileOnly files(nfNomadJar)
         testRuntimeOnly files(nfNomadJar)
     } else {
-        logger.warn "nf-s5cmd: could not find nf-nomad jar in any of ${candidatePaths*.path}; the DistributedWorkdirProvider SPI factory will fail to compile. Build nf-nomad first (e.g. `make bundle` in nf-abc-cluster-dev)."
+        logger.warn "nf-nomad-s5cmd: could not find nf-nomad jar in any of ${candidatePaths*.path}; the DistributedWorkdirProvider SPI factory will fail to compile. Build nf-nomad first (e.g. `make bundle` in nf-abc-cluster-dev)."
     }
 }
 
@@ -69,12 +70,14 @@ test {
 
 nextflowPlugin {
     nextflowVersion = '25.10.4'
-    description = 'High-throughput S3 file staging for Nextflow via the s5cmd CLI'
-    provider = 'nf-s5cmd'
-    className = 'nextflow.s5cmd.S5cmdPlugin'
+    description = 'High-throughput S3 file staging for Nextflow on Nomad. Registers as a ' +
+            'DistributedWorkdirProvider against nf-nomad\'s SPI extension point — currently a ' +
+            'Nomad-only integration; requires nf-nomad to be loaded alongside it.'
+    provider = 'nf-nomad-s5cmd'
+    className = 'nextflow.nomad.s5cmd.NomadS5cmdPlugin'
     extensionPoints = [
-            'nextflow.s5cmd.observer.S5cmdTransferObserverFactory',
-            'nextflow.s5cmd.nomad.S5cmdNomadInteropFactory'
+            'nextflow.nomad.s5cmd.observer.S5cmdTransferObserverFactory',
+            'nextflow.nomad.s5cmd.spi.S5cmdNomadInteropFactory'
     ]
     // PF4J Plugin-Dependencies — wires nf-nomad's classloader as our parent
     // so we can @Extension against nf-nomad's SPI.

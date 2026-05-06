@@ -11,15 +11,12 @@ S3 transfer path when you need:
 - Deterministic CLI semantics — every transfer is a reproducible
   `s5cmd cp` invocation visible in `.command.run`.
 
-> Sibling plugin to **nf-rclone** (multi-backend, configurable, SFTP/crypt
-> support). Pick **nf-s5cmd** when your pipeline lives entirely on S3-compatible
-> storage and you need raw throughput. Pick **nf-rclone** when you need
-> multiple backends, encryption, or non-S3 endpoints.
+> Use **nf-nomad-s5cmd** when your pipeline lives entirely on S3-compatible
+> storage and you need raw throughput from `s5cmd cp`'s worker pool.
 
 ## Status
 
-**Experimental / development** — built inside the `abc-cluster` monorepo for
-internal use. Tracks Nextflow 25.10.x.
+**Experimental / development** — built only for the `nf-nomad` plugin. Tracks Nextflow 25.10.x.
 
 ## Quick start
 
@@ -76,16 +73,21 @@ beyond the initial scaffold.
 
 ## Composition with nf-nomad
 
-When deployed alongside `nf-nomad` on an HPC/Nomad cluster, `nf-s5cmd` works
-the same way `nf-rclone` does — Nextflow's `BashWrapperBuilder` picks up the
-`S5cmdFileCopyStrategy` for matching paths, and the resulting `s5cmd cp` calls
-in `.command.run` are executed inside whichever Nomad container the worker
-runs in. No nf-nomad changes are required.
+When deployed alongside `nf-nomad` on an HPC/Nomad cluster, Nextflow's
+`BashWrapperBuilder` picks up the `S5cmdFileCopyStrategy` for matching paths,
+and the resulting `s5cmd cp` calls in `.command.run` are executed inside
+whichever Nomad container the worker runs in. No nf-nomad changes are required.
 
-For shipping `s5cmd` to every Nomad client, mirror the `abc-place-rclone`
-sysbatch pattern (`/opt/nomad/scratch/bin/s5cmd`, scratch mounted into
-workers).
+For shipping `s5cmd` to every Nomad client, register the binary in `tools.toml`
+and use a sysbatch job to drop it at a stable host-volume path (e.g.
+`/opt/nomad/scratch/bin/s5cmd`) that workers can mount.
 
 ## License
 
-Apache License 2.0 — see [`COPYING`](COPYING).
+Eclipse Public License 2.0 (EPL-2.0) — see [`COPYING`](COPYING).
+
+The plugin is intentionally licensed under EPL-2.0 (rather than Apache-2.0) to
+encourage modifications to be contributed back upstream. EPL's "file-level
+copyleft" applies only to derivative works of EPL-licensed source files; it
+does not extend to user pipelines or other plugins that merely use the
+plugin at runtime.

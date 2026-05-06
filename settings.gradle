@@ -14,4 +14,4 @@
  * limitations under the License.
  */
 
-rootProject.name = 'nf-s5cmd'
+rootProject.name = 'nf-nomad-s5cmd'

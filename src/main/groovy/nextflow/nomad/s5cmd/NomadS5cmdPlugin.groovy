@@ -28,7 +28,7 @@ import org.pf4j.PluginWrapper
  * subcommand `nextflow plugin nf-nomad-s5cmd validate` provides a
  * standalone connectivity check against a configured endpoint.
  *
- * @author abc-cluster
+ * @author Incremental Steps Software Solutions OÜ
  */
 @Slf4j
 class NomadS5cmdPlugin extends BasePlugin implements PluginAbstractExec {

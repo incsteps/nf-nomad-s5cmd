@@ -1,4 +1,4 @@
-# nf-s5cmd
+# nf-nomad-s5cmd
 
 High-throughput S3 file staging for Nextflow via the [`s5cmd`](https://github.com/peak/s5cmd)
 command-line client. Designed as a focused alternative to Nextflow's built-in
@@ -24,7 +24,7 @@ S3 transfer path when you need:
 
 ```groovy
 plugins {
-    id 'nf-s5cmd@0.1.0'
+    id 'nf-nomad-s5cmd@0.1.0'
 }
 
 s5cmd {

@@ -416,11 +416,6 @@ export PATH="/nxf-work/bin:/opt/abc/bin:\$\${PATH:-/usr/local/sbin:/usr/local/bi
 TASK_DIR="${TASK_DIR_VAR}"
 mkdir -p "\$TASK_DIR" && cd "\$TASK_DIR"
 
-apt-get update && apt-get install -y curl
-curl -Lf https://github.com/peak/s5cmd/releases/download/v2.3.0/s5cmd_2.3.0_Linux-64bit.tar.gz | tar -xz
-mkdir -p /nxf-work/bin
-mv s5cmd /nxf-work/bin/
-
 # Step log: every important action appends here. Pushed back unconditionally
 # by the EXIT trap below, so we always have visibility on worker behaviour.
 NF_DBG=.nxf-debug.log

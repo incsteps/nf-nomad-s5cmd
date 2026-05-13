@@ -22,25 +22,21 @@ plugins {
 // nf-nomad's SPI. The compileOnly link below brings in nf-nomad's SPI types
 // at compile time without bundling them into the plugin jar (PF4J wires the
 // runtime classloader at load time via the Plugin-Dependencies manifest).
-def candidatePaths = [
-    file('../nf-nomad/build/libs'),
-    file('../nf-abc-cluster-dev/plugins/nf-nomad/build/libs'),
-]
-def nfNomadJar = candidatePaths
-        .findResult { dir ->
-            dir.exists()
-                ? dir.listFiles()?.find { it.name.startsWith('nf-nomad-') && it.name.endsWith('.jar') }
-                : null
+
+repositories {
+    mavenCentral()
+    maven {
+        url = uri("https://maven.pkg.github.com/nextflow-io/nf-nomad")
+        credentials {
+            username = project.findProperty("gpr.user") ?: System.getenv("GITHUB_USERNAME")
+            password = project.findProperty("gpr.key") ?: System.getenv("GITHUB_TOKEN")
         }
+    }
+}
 
 dependencies {
-    if (nfNomadJar) {
-        compileOnly files(nfNomadJar)
-        testCompileOnly files(nfNomadJar)
-        testRuntimeOnly files(nfNomadJar)
-    } else {
-        logger.warn "nf-nomad-s5cmd: could not find nf-nomad jar in any of ${candidatePaths*.path}; the DistributedWorkdirProvider SPI factory will fail to compile. Build nf-nomad first (e.g. `make bundle` in nf-abc-cluster-dev)."
-    }
+    compileOnly 'io.nextflow:nf-nomad:0.4.0-remoteworkdir'
+    testImplementation 'io.nextflow:nf-nomad:0.4.0-remoteworkdir'
 }
 
 sourceSets {

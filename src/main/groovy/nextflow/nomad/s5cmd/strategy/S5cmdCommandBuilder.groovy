@@ -84,8 +84,13 @@ class S5cmdCommandBuilder {
 
     // ── internals ─────────────────────────────────────────────────────────
 
-    /** Global flags: binary path + endpoint + tls + log + retries + workers. */
-    private String global() {
+    /**
+     * Global flags: binary path + endpoint + tls + log + retries + workers.
+     * Package-visible so {@link nextflow.nomad.s5cmd.spi.S5cmdNomadInterop}
+     * can embed the same flags in the inline s5cmd calls inside the worker
+     * bootstrap script (those calls can't go through buildCopy/buildCopyDir).
+     */
+    protected String global() {
         S5cmdCpConfig cp = config.cp
         S5cmdS3Config s = config.s3
         List<String> parts = [config.binary]

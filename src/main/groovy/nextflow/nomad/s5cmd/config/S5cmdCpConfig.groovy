@@ -28,7 +28,7 @@ import groovy.util.logging.Slf4j
  *   numWorkers        = 256    // -numworkers global pool
  *   retryCount        = 10     // -r
  *   partSize          = 50     // -p   in MiB; 0 = s5cmd default
- *   logLevel          = 'INFO' // --log
+ *   logLevel          = 'info' // --log (trace|debug|info|error; always lowercase)
  *   extraFlags        = ['--dry-run']
  * }}
  * </pre>

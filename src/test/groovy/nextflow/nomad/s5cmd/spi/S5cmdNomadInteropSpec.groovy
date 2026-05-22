@@ -284,14 +284,20 @@ class S5cmdNomadInteropSpec extends Specification {
         interop.prepare()
         String script = interop.submitCommand[2]
 
-        then: 'pulls .command.* from the remote workdir'
-        script.contains('s5cmd cp "$${NXF_S5CMD_REMOTE_WORKDIR}.command.*" ./')
+        then: 'pulls .command.* from the remote workdir — full global flags embedded'
+        // global() produces: s5cmd --endpoint-url <url> --log info -r N -numworkers N
+        // The key assertion is that the script contains both the binary+flags prefix AND
+        // the cp argument; checking the pull pattern covers both.
+        script.contains('cp "$${NXF_S5CMD_REMOTE_WORKDIR}.command.*" ./')
+        script.contains('s5cmd --endpoint-url http://rustfs:9900')
 
         and: 'writes the local exit code marker'
         script.contains("printf '%s' \"\$_exit_code\" > .exitcode")
 
         and: 'pushes the entire task dir back at the end'
-        script.contains('s5cmd cp ./ "$${NXF_S5CMD_REMOTE_WORKDIR}"')
+        script.contains('cp ./ "$${NXF_S5CMD_REMOTE_WORKDIR}"')
+        // The push-back line uses the same global flags
+        script.contains('s5cmd --endpoint-url http://rustfs:9900')
 
         and: 'falls back to .command.sh when .command.run is absent'
         script.contains("elif [ -f .command.sh ]; then")
@@ -309,8 +315,10 @@ class S5cmdNomadInteropSpec extends Specification {
         interop.prepare()
         String script = interop.submitCommand[2]
 
-        then:
-        script.contains('/custom/bin/s5cmd cp "$${NXF_S5CMD_REMOTE_WORKDIR}.command.*" ./')
+        then: 'custom binary appears in the bootstrap s5cmd invocation with global flags'
+        // global() now starts with the custom binary path, followed by global flags
+        script.contains('/custom/bin/s5cmd --endpoint-url')
+        script.contains('cp "$${NXF_S5CMD_REMOTE_WORKDIR}.command.*" ./')
     }
 
     // ── env exports ───────────────────────────────────────────────────────

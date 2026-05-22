@@ -179,7 +179,12 @@ class S5cmdNomadInterop implements DistributedWorkdirProvider {
         // Prefix with envExports so the operator-side s5cmd inherits the same
         // AWS_*/S3_* identity the worker bootstrap script will use — without
         // depending on the operator's shell environment having them set.
-        String src = task.workDir.toString() + '/.command.*'
+        // toS3Uri() normalises the NIO-cloud-path URI to the canonical s3://bucket/key
+        // form that s5cmd expects. Path.toString() drops the scheme entirely; toUri()
+        // gives s3:///bucket/key (empty authority, bucket embedded in path) — both wrong.
+        // The trailing '/' is the directory separator: .command.* files live *inside*
+        // task.workDir, not adjacent to it (s3://.../HASH/.command.sh not s3://.../HASH.command.sh).
+        String src = toS3Uri(task.workDir) + '/.command.*'
         String dst = remoteTaskDir()
         String cmd = cmdBuilder.buildCopy(src, dst, true)
         runShell(prefixWithEnvExports(cmd))
@@ -396,9 +401,22 @@ class S5cmdNomadInterop implements DistributedWorkdirProvider {
      * Bootstrap script the worker runs as its main task. Inline-quoted with
      * Nomad-template-safe `$$` escapes wherever a literal `$` should reach
      * bash (Nomad templating expands single `$` first).
+     *
+     * <p>The worker's inline s5cmd invocations use {@code s5cmdCall}, which
+     * is the full {@code s5cmd [global-flags]} string captured at script
+     * generation time.  This is necessary because the global flags
+     * (in particular {@code --no-verify-ssl} for private-CA endpoints such as
+     * the ABC-cluster seedling's MinIO) are not expressible via env vars and
+     * must appear on every s5cmd command line.</p>
      */
     protected String bootstrapScript() {
         String binary = s5cmdConfig.binary ?: 's5cmd'
+        // Full invocation including global flags (--endpoint-url, --no-verify-ssl,
+        // --log, -r, -numworkers). Generated once here so the bootstrap script
+        // doesn't need to reconstruct them.  The endpoint is also available via
+        // S3_ENDPOINT_URL env (Nomad injects it), but --no-verify-ssl has no
+        // env-var equivalent, so we must embed it explicitly.
+        String s5cmdCall = cmdBuilder.global()
         // Nomad-escape rules (learned the hard way):
         //   • `\${VAR}` / `\${VAR:-default}` from bash → write `$${VAR}` here
         //     (Nomad's HCL escape: `$$` → `$` ONLY when followed by `{`)
@@ -427,7 +445,7 @@ push_debug_then_exit() {
   log "EXIT trap fired with rc=\$rc"
   log "TASK_DIR contents:"
   ls -la . >> "\$NF_DBG" 2>&1 || true
-  ${binary} cp ./ "\$\${NXF_S5CMD_REMOTE_WORKDIR}" >> "\$NF_DBG" 2>&1 \
+  ${s5cmdCall} cp ./ "\$\${NXF_S5CMD_REMOTE_WORKDIR}" >> "\$NF_DBG" 2>&1 \
     || log "FINAL push-back to S3 FAILED"
   exit \$rc
 }
@@ -442,16 +460,16 @@ log "PATH=\$PATH"
 log "s5cmd at /nxf-work/bin/s5cmd:"
 ls -la /nxf-work/bin/s5cmd >> "\$NF_DBG" 2>&1 || log "  /nxf-work/bin/s5cmd MISSING"
 log "s5cmd version:"
-${binary} version >> "\$NF_DBG" 2>&1 || log "  s5cmd version FAILED"
+${s5cmdCall} version >> "\$NF_DBG" 2>&1 || log "  s5cmd version FAILED"
 log "NXF_S5CMD_REMOTE_WORKDIR=\$\${NXF_S5CMD_REMOTE_WORKDIR:-<unset>}"
 
 log "step 1: pull .command.* from S3"
-${binary} cp "\$\${NXF_S5CMD_REMOTE_WORKDIR}.command.*" ./ >> "\$NF_DBG" 2>&1
+${s5cmdCall} cp "\$\${NXF_S5CMD_REMOTE_WORKDIR}.command.*" ./ >> "\$NF_DBG" 2>&1
 rc=\$?; log "  cp .command.* rc=\$rc"
 
 log "step 2: pull pipeline bin/ from session-level dir (\$\${NXF_S5CMD_SESSION_BIN_DIR:-<unset>})"
 mkdir -p .nxf-bin
-${binary} cp "\$\${NXF_S5CMD_SESSION_BIN_DIR}*" .nxf-bin/ >> "\$NF_DBG" 2>&1
+${s5cmdCall} cp "\$\${NXF_S5CMD_SESSION_BIN_DIR}*" .nxf-bin/ >> "\$NF_DBG" 2>&1
 rc=\$?; log "  cp .nxf-bin/* rc=\$rc (non-zero is OK if pipeline has no bin/)"
 
 for bd in .nxf-bin/*/ ; do
@@ -536,7 +554,8 @@ exit "\$_exit_code"
     }
 
     protected void copyAllArtifacts() {
-        String cmd = cmdBuilder.buildCopyDir(remoteTaskDir(), task.workDir.toString(), false)
+        // toS3Uri() — same normalisation as uploadCommandFiles(); see that method for rationale.
+        String cmd = cmdBuilder.buildCopyDir(remoteTaskDir(), toS3Uri(task.workDir), false)
         runShell(prefixWithEnvExports(cmd))
     }
 
@@ -586,6 +605,36 @@ exit "\$_exit_code"
     }
 
     // ── path helpers (mirrors RcloneNomadInterop) ─────────────────────────
+
+    /**
+     * Convert a NIO {@link Path} to a string that s5cmd (or a POSIX shell) can use.
+     *
+     * <p>Three cases:
+     * <ul>
+     *   <li><b>Local path</b> ({@code file://…} URI) — return {@code path.toString()},
+     *       which gives the normal POSIX or Windows filesystem path expected by shell
+     *       commands.</li>
+     *   <li><b>S3 NIO (nf-amazon) path</b> — {@code toUri().toString()} returns
+     *       {@code s3:///bucket/key} (empty authority; bucket in path-component) because
+     *       the nf-amazon S3 filesystem registers without a host. Normalise to the
+     *       canonical {@code s3://bucket/key} form that s5cmd requires.</li>
+     *   <li><b>Any other cloud path</b> ({@code gs://}, {@code az://}, …) — return the
+     *       URI string unchanged; those schemes are not expected here but shouldn't
+     *       silently corrupt.</li>
+     * </ul>
+     */
+    protected static String toS3Uri(Path path) {
+        String uri = path.toUri().toString()
+        if (uri.startsWith('file:///') || uri.startsWith('file:/') && !uri.startsWith('file://')) {
+            // Local filesystem path — give the shell a plain OS path, not a file:// URI.
+            return path.toString()
+        }
+        // s3:///bucket/key  →  s3://bucket/key
+        if (uri.startsWith('s3:///')) {
+            return 's3://' + uri.substring('s3:///'.length())
+        }
+        return uri
+    }
 
     protected static String relativePathFromSessionWorkDir(Path taskWorkDir, Path sessionWorkDir) {
         if( taskWorkDir == null || sessionWorkDir == null ) return null

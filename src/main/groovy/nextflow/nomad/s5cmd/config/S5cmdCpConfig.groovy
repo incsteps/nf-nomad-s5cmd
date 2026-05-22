@@ -28,7 +28,7 @@ import groovy.util.logging.Slf4j
  *   numWorkers        = 256    // -numworkers global pool
  *   retryCount        = 10     // -r
  *   partSize          = 50     // -p   in MiB; 0 = s5cmd default
- *   logLevel          = 'INFO' // --log
+ *   logLevel          = 'info' // --log (trace|debug|info|error; always lowercase)
  *   extraFlags        = ['--dry-run']
  * }}
  * </pre>
@@ -62,8 +62,8 @@ class S5cmdCpConfig {
      */
     int partSize = 0
 
-    /** Log level: trace|debug|info|warn|error. Maps to s5cmd --log. Default INFO. */
-    String logLevel = 'INFO'
+    /** Log level: trace|debug|info|warn|error. Maps to s5cmd --log. Default info (lowercase). */
+    String logLevel = 'info'
 
     /**
      * Extra raw flags appended verbatim to every `s5cmd cp` invocation.

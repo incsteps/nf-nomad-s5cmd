@@ -25,7 +25,7 @@ class S5cmdCpConfigSpec extends Specification {
         cfg.numWorkers == 256
         cfg.retryCount == 10
         cfg.partSize == 0                          // 0 = let s5cmd pick
-        cfg.logLevel == 'INFO'
+        cfg.logLevel == 'info'
         cfg.extraFlags == []
     }
 

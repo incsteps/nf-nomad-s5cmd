@@ -69,7 +69,7 @@ nextflowPlugin {
     description = 'High-throughput S3 file staging for Nextflow on Nomad. Registers as a ' +
             'DistributedWorkdirProvider against nf-nomad\'s SPI extension point — currently a ' +
             'Nomad-only integration; requires nf-nomad to be loaded alongside it.'
-    provider = 'nf-nomad-s5cmd'
+    provider = 'Incremental Steps'
     className = 'nextflow.nomad.s5cmd.NomadS5cmdPlugin'
     extensionPoints = [
             'nextflow.nomad.s5cmd.observer.S5cmdTransferObserverFactory',

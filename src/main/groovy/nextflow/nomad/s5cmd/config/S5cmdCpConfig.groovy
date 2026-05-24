@@ -62,7 +62,7 @@ class S5cmdCpConfig {
      */
     int partSize = 0
 
-    /** Log level: trace|debug|info|warn|error. Maps to s5cmd --log. Default info (lowercase). */
+    /** Log level: trace|debug|info|warn|error. Maps to s5cmd --log. Default INFO. */
     String logLevel = 'info'
 
     /**

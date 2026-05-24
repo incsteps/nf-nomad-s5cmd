@@ -137,7 +137,7 @@ nomad {
             numWorkers  = 64     // -numworkers
             retryCount  = 3      // -r
             partSize    = 50     // MB
-            logLevel    = 'INFO'
+            logLevel    = 'info'
         }
 
         // ↓↓↓ Distributed-workdir mode — opt in for non-shared-FS clusters
@@ -247,7 +247,7 @@ After either run:
 | `nomad.s5cmd.cp.numWorkers` | `64` | s5cmd `-numworkers` |
 | `nomad.s5cmd.cp.retryCount` | `3` | s5cmd `-r` |
 | `nomad.s5cmd.cp.partSize` | `50` | MB |
-| `nomad.s5cmd.cp.logLevel` | `INFO` | `DEBUG` / `INFO` / `WARN` |
+| `nomad.s5cmd.cp.logLevel` | `info` | `debug` / `info` / `warn` (s5cmd expects lowercase) |
 | `nomad.s5cmd.workDir.enabled` | `false` | Activate SPI distributed-workdir mode |
 | `nomad.s5cmd.workDir.bucket` | — | `s3://<bucket>` root for session work-dirs |
 | `nomad.s5cmd.workDir.prefix` | — | Optional path prefix under the bucket |
@@ -261,6 +261,80 @@ After either run:
   `/opt/nomad/scratch/bin/s5cmd` is recommended.
 - An S3-compatible endpoint (AWS, MinIO, rustfs, Ceph RGW, …).
 - Nextflow ≥ 25.10.
+
+## Operator deployment requirements (host-volume mode)
+
+The following three conditions must all be true before submitting a Nextflow
+job with `workDir.enabled = true` on a Nomad cluster that delivers s5cmd via
+a host volume.
+
+### 1 — s5cmd binary on the host volume
+
+`s5cmd` must be pre-installed inside the host volume's source directory on
+every Nomad client, under a `bin/` sub-directory that the bootstrap script
+adds to `PATH`.  Example for a host volume whose source path is
+`/opt/abc-seedling/nf-work`:
+
+```
+/opt/abc-seedling/nf-work/bin/s5cmd    ← must be executable
+```
+
+The bootstrap script prepends `<volume-mount>/bin` to `PATH` before any
+s5cmd call.  If the binary is missing the bootstrap exits immediately and
+the Nomad alloc fails at the version-check step (first line in the script).
+
+The recommended production delivery mechanism is a Nomad `sysbatch` job that
+downloads the correct s5cmd release tarball and installs it on every client.
+Manual `sudo curl` installs work for testing.
+
+### 2 — Nomad ACL policy: `host_volume` capability
+
+The Nomad token used to submit jobs **must** carry a `host_volume` policy
+capability in addition to the namespace `write` policy.  A bare namespace
+write is insufficient when the job spec includes a `host_volume` stanza.
+
+```hcl
+# excerpt from the token's ACL policy
+namespace "<your-namespace>" {
+    policy = "write"
+}
+host_volume "<your-volume-name>" {
+    policy = "write"
+}
+```
+
+When the capability is missing, Nomad returns HTTP 403 with an empty response
+body.  The Nomad Java client surfaces this as an `ApiException` with a blank
+message (not "Permission denied") — PATCH the ACL policy via
+`/v1/acl/policy/<name>` to add the capability.
+
+### 3 — `jobs.volumes` uses `path:`, not `mountPath:`
+
+`nf-nomad`'s `JobVolume` parser only recognises the keys
+`['type', 'name', 'path', 'workDir', 'readOnly']`.  The key `mountPath` is
+silently dropped, which causes the mount destination to fall back to an
+internal computation that produces the wrong path (e.g. `/s3-bucket/work`
+instead of `/nxf-work`).
+
+Use `path:` in every volume entry:
+
+```groovy
+// ✓ correct
+jobs.volumes = [
+    [type: 'host', name: 'nf-work', path: '/nxf-work', readOnly: false]
+]
+
+// ✗ wrong — mountPath is silently ignored
+jobs.volumes = [
+    [type: 'host', name: 'nf-work', mountPath: '/nxf-work', readOnly: false]
+]
+```
+
+When exactly one volume is present with no explicit `workDir` key, nf-nomad
+auto-assigns `workDir = true` to it.  Combined with `path: '/nxf-work'` this
+correctly mounts the volume at `/nxf-work` inside the container.
+
+---
 
 ## License
 

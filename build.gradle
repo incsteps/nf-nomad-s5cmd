@@ -24,6 +24,12 @@ plugins {
 // runtime classloader at load time via the Plugin-Dependencies manifest).
 
 repositories {
+    // Local-build escape hatch: nf-nomad-s5cmd's compileOnly dep on a pinned
+    // io.nextflow:nf-nomad:0.4.0-edge5 fails when (a) seqera.io's public
+    // releases mirror 403s and (b) GitHub Packages 401s for tokens without
+    // explicit nextflow-io org access. mavenLocal lets the local nf-nomad
+    // submodule's `publishToMavenLocal` satisfy the dep for in-tree builds.
+    mavenLocal()
     mavenCentral()
     maven {
         url = uri("https://maven.pkg.github.com/nextflow-io/nf-nomad")

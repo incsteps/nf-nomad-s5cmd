@@ -347,14 +347,30 @@ class S5cmdNomadInterop implements DistributedWorkdirProvider {
             String stageName = entry.key
             Path source = entry.value
             if( source == null ) continue
-            // Some sources are already S3 URLs (e.g. when the pipeline passes
-            // an s3:// path directly). Skip those — the worker's stage-in s5cmd
-            // can fetch from the original location, no need to copy through
-            // our task-local inputs dir.
-            String src = source.toAbsolutePath().toString()
-            if( src.startsWith('s3:/') || src.startsWith('s3a:/') ) {
-                log.debug "[NOMAD] nf-s5cmd: input `${stageName}` is already remote (${src}); skipping operator-side upload"
-                continue
+            // Resolve the source to a form s5cmd accepts:
+            //   - Local filesystem path → plain OS path string.
+            //   - S3 NIO path (nf-amazon S3Path) → canonical `s3://bucket/key`.
+            //
+            // IMPORTANT: do NOT use `source.toAbsolutePath().toString()` to
+            // detect S3 sources — on an nf-amazon S3Path it returns
+            // `/bucket/key` (scheme stripped), same shape as a local POSIX
+            // path. The right detection is the URI scheme (`s3` / `s3a`).
+            // The previous code (`startsWith('s3:/')` on the string form)
+            // never matched for S3Path inputs and fell through to emit
+            // `s5cmd cp '/bucket/key' 's3://...'`, which s5cmd then read as
+            // "local file `/bucket/key` not found".
+            //
+            // For S3 sources we still do the operator-side cp: the worker's
+            // stage-in script always pulls inputs from `<remoteTaskDir>/inputs/`,
+            // so the head must put them there (s5cmd does an S3→S3 cp which
+            // is fast and stays inside MinIO).
+            String src
+            String scheme = null
+            try { scheme = source.toUri()?.getScheme() } catch (Exception ignored) { /* leave null */ }
+            if( scheme == 's3' || scheme == 's3a' ) {
+                src = toS3Uri(source)
+            } else {
+                src = source.toAbsolutePath().toString()
             }
             // Directories need s5cmd's recursive form (cp <src>/* <dst>/);
             // single files use the plain cp form. The worker's stage-in

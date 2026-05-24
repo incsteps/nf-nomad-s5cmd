@@ -36,10 +36,13 @@ jobs:
 
       - name: Compile
         run: ./gradlew assemble
+        env:
+          GITHUB_USERNAME: ${{ env.GITHUB_ACTOR }}
 
       - name: Tests
         run: ./gradlew check
         env:
+          GITHUB_USERNAME: ${{ env.GITHUB_ACTOR }}
           GRADLE_OPTS: '-Dorg.gradle.daemon=false'
 
   publish-gpr:
@@ -56,6 +59,8 @@ jobs:
 
       - name: build artifacts
         run: ./gradlew clean installPlugin -x test -P version=${GITHUB_REF#refs/tags/}
+        env:
+          GITHUB_USERNAME: ${{ env.GITHUB_ACTOR }}
 
       - name: Upload artifact and release
         uses: softprops/action-gh-release@v2
@@ -69,4 +74,5 @@ jobs:
       - name: publish release
         env:
           NPR_API_KEY: ${{ secrets.NPR_API_KEY }}
+          GITHUB_USERNAME: ${{ env.GITHUB_ACTOR }}
         run: ./gradlew releasePlugin -x test -P version=${GITHUB_REF#refs/tags/}

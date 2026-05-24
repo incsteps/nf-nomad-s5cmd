@@ -37,9 +37,11 @@ jobs:
 
       - name: Compile
         run: ./gradlew assemble
+        env:
+          GITHUB_USERNAME: ${{ env.GITHUB_ACTOR }}
 
       - name: Tests
         run: ./gradlew check
         env:
           GRADLE_OPTS: '-Dorg.gradle.daemon=false'
-
+          GITHUB_USERNAME: ${{ env.GITHUB_ACTOR }}

@@ -23,3 +23,7 @@ Thumbs.db
 # Local Claude metadata
 .claude/
 CLAUDE.md
+/src/e2e/.nf-test.log
+/src/e2e/.nf-test/
+/docker/minio-data/
+/docker/nomad-data/

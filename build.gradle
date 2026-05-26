@@ -41,8 +41,8 @@ repositories {
 }
 
 dependencies {
-    compileOnly 'io.nextflow:nf-nomad:0.4.0-edge5'
-    testImplementation 'io.nextflow:nf-nomad:0.4.0-edge5'
+    compileOnly 'io.nextflow:nf-nomad:0.4.0-edge6'
+    testImplementation 'io.nextflow:nf-nomad:0.4.0-edge6'
 }
 
 sourceSets {

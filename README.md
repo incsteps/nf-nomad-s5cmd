@@ -101,7 +101,7 @@ Canonical config shape — all keys live under `nomad.s5cmd.*`:
 ```groovy
 plugins {
     id 'nf-nomad@99.99.99'
-    id 'nf-s5cmd@99.99.99'
+    id 'nf-nomad-s5cmd@99.99.99'
 }
 
 nomad {

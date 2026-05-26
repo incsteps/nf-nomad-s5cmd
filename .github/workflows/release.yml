@@ -6,8 +6,8 @@ on:
       - '[0-9]+.[0-9]+.[0-9]+-edge[0-9]+'
 
 permissions:
-  contents: read
-  packages: read
+  contents: write
+  packages: write
 
 jobs:
   build:

@@ -327,9 +327,27 @@ class S5cmdNomadInterop implements DistributedWorkdirProvider {
      * stage-in (their {@code .command.run} references files only present
      * on the head's filesystem).
      *
-     * <p>No-op when the task has no input files, when input files come from
-     * S3 directly (the worker's stage-in script already knows how to fetch
-     * those), or when an input file already lives at a remote-resolvable path.</p>
+     * <h3>S3 source routing</h3>
+     * <p>Two S3 paths are handled differently:</p>
+     * <ul>
+     *   <li><b>Same-bucket inputs</b> (e.g. an S3 path already within
+     *       {@code workDir.bucket}): fast in-cluster S3→S3 copy via the
+     *       configured MinIO endpoint.</li>
+     *   <li><b>External-bucket inputs</b> (e.g. {@code s3://ngi-igenomes/…}
+     *       from public AWS iGenomes): a two-step cross-endpoint transfer —
+     *       (1) download from the external endpoint via a bare s5cmd invocation
+     *       (no custom {@code --endpoint-url}, so it hits AWS S3 directly;
+     *       public buckets use {@code --no-sign-request}), then
+     *       (2) upload the local temp copy to the cluster's MinIO inputs dir.
+     *       The worker stage-in script is unchanged: it always pulls from
+     *       {@code remoteTaskDir/inputs/} on MinIO.</li>
+     * </ul>
+     *
+     * <p>This avoids the "mixing S3 backends" failure where s5cmd was sent
+     * a cross-endpoint S3→S3 copy command with the MinIO endpoint URL but
+     * an AWS source bucket (e.g. {@code s3://ngi-igenomes/igenomes/…}),
+     * causing MinIO to reject the request because it knows nothing about
+     * the source bucket.</p>
      */
     protected void uploadInputFiles() {
         Map<String, Path> inputFiles = null
@@ -347,34 +365,26 @@ class S5cmdNomadInterop implements DistributedWorkdirProvider {
             String stageName = entry.key
             Path source = entry.value
             if( source == null ) continue
-            // Resolve the source to a form s5cmd accepts:
-            //   - Local filesystem path → plain OS path string.
-            //   - S3 NIO path (nf-amazon S3Path) → canonical `s3://bucket/key`.
-            //
-            // IMPORTANT: do NOT use `source.toAbsolutePath().toString()` to
-            // detect S3 sources — on an nf-amazon S3Path it returns
-            // `/bucket/key` (scheme stripped), same shape as a local POSIX
-            // path. The right detection is the URI scheme (`s3` / `s3a`).
-            // The previous code (`startsWith('s3:/')` on the string form)
-            // never matched for S3Path inputs and fell through to emit
-            // `s5cmd cp '/bucket/key' 's3://...'`, which s5cmd then read as
-            // "local file `/bucket/key` not found".
-            //
-            // For S3 sources we still do the operator-side cp: the worker's
-            // stage-in script always pulls inputs from `<remoteTaskDir>/inputs/`,
-            // so the head must put them there (s5cmd does an S3→S3 cp which
-            // is fast and stays inside MinIO).
-            String src
+
+            // Detect S3 sources via URI scheme (NOT toString() — an nf-amazon
+            // S3Path stringifies to `/bucket/key`, indistinguishable from a
+            // local POSIX path).
             String scheme = null
             try { scheme = source.toUri()?.getScheme() } catch (Exception ignored) { /* leave null */ }
-            if( scheme == 's3' || scheme == 's3a' ) {
-                src = toS3Uri(source)
-            } else {
-                src = source.toAbsolutePath().toString()
+            boolean isS3 = (scheme == 's3' || scheme == 's3a')
+
+            if( isS3 && !isWorkDirBucket(source) ) {
+                // External bucket (e.g. s3://ngi-igenomes): route via
+                // cross-endpoint two-step to avoid MinIO rejecting the copy.
+                uploadExternalS3Input(source, stageName, inputsBase)
+                continue
             }
-            // Directories need s5cmd's recursive form (cp <src>/* <dst>/);
-            // single files use the plain cp form. The worker's stage-in
-            // strategy mirrors this — see S5cmdFileCopyStrategy.
+
+            // Same-bucket S3 or local file: existing single-step path.
+            String src = isS3 ? toS3Uri(source) : source.toAbsolutePath().toString()
+
+            // Directories need s5cmd's recursive form; single files the plain form.
+            // The worker stage-in strategy mirrors this — see S5cmdFileCopyStrategy.
             String cmd
             if( Files.isDirectory(source) ) {
                 String dst = inputsBase + stageName + '/'
@@ -385,6 +395,86 @@ class S5cmdNomadInterop implements DistributedWorkdirProvider {
                 cmd = cmdBuilder.buildCopy(src, dst, true)
             }
             runShell(prefixWithEnvExports(cmd))
+        }
+    }
+
+    /**
+     * Two-step cross-endpoint transfer for inputs from external S3 buckets
+     * (not the cluster's MinIO). Sequence:
+     * <ol>
+     *   <li>Download from the external endpoint using a bare s5cmd invocation
+     *       (no {@code --endpoint-url}; defaults to AWS S3). Public buckets
+     *       additionally get {@code --no-sign-request}.</li>
+     *   <li>Upload the local temp file to the task's MinIO inputs dir using
+     *       the configured cluster endpoint + credentials.</li>
+     * </ol>
+     *
+     * <p>Large reference files (genome FASTAs, index tarballs) are
+     * downloaded in full to the head node before re-upload. This is slower
+     * than an in-cluster S3→S3 copy but correct, and is only triggered for
+     * external-bucket inputs. A future optimisation could use presigned
+     * URLs or a multipart hand-off, but correctness first.</p>
+     */
+    protected void uploadExternalS3Input(Path source, String stageName, String inputsBase) {
+        String srcUri = toS3Uri(source)
+        log.info "[NOMAD] nf-s5cmd: external S3 input '${stageName}' (${srcUri}) — cross-endpoint download then upload"
+        boolean isDir = false
+        try { isDir = Files.isDirectory(source) } catch (Exception ignored) {}
+
+        // Use the configured binary name (defaults to 's5cmd' from PATH, but respects
+        // s5cmd { binary = '/explicit/path/...' } operator overrides and the
+        // fallback probe in NomadS5cmdPlugin.validateS5cmdBinary().
+        String bin = s5cmdConfig.binary ?: 's5cmd'
+
+        if( isDir ) {
+            // Directory: download to local temp dir, then upload recursively to MinIO.
+            Path tmpDir = Files.createTempDirectory('s5cmd-ext-')
+            try {
+                String download = "${bin} --no-verify-ssl --no-sign-request cp '${srcUri}/*' '${tmpDir}/'"
+                int rc = runShellQuiet(download)
+                if( rc != 0 ) {
+                    // Retry without --no-sign-request (private external bucket)
+                    log.debug "[NOMAD] nf-s5cmd: public download failed (rc=${rc}); retrying with credentials for '${srcUri}'"
+                    runShell("${bin} --no-verify-ssl cp '${srcUri}/*' '${tmpDir}/'")
+                }
+                String upload = cmdBuilder.buildCopyDir(tmpDir.toString(), inputsBase + stageName + '/', true)
+                runShell(prefixWithEnvExports(upload))
+            } finally {
+                tmpDir.toFile().deleteDir()
+            }
+        } else {
+            // Single file: download to temp, upload to MinIO.
+            Path tmp = Files.createTempFile('s5cmd-ext-', '-' + stageName)
+            try {
+                String download = "${bin} --no-verify-ssl --no-sign-request cp '${srcUri}' '${tmp}'"
+                int rc = runShellQuiet(download)
+                if( rc != 0 ) {
+                    log.debug "[NOMAD] nf-s5cmd: public download failed (rc=${rc}); retrying with credentials for '${srcUri}'"
+                    runShell("${bin} --no-verify-ssl cp '${srcUri}' '${tmp}'")
+                }
+                String upload = cmdBuilder.buildCopy(tmp.toString(), inputsBase + stageName, true)
+                runShell(prefixWithEnvExports(upload))
+            } finally {
+                Files.deleteIfExists(tmp)
+            }
+        }
+    }
+
+    /**
+     * Returns true when the given S3 source path lives within the configured
+     * {@code workDir.bucket} — i.e. on the same MinIO endpoint. External
+     * buckets (e.g. {@code s3://ngi-igenomes}) return false and are routed
+     * through {@link #uploadExternalS3Input}.
+     */
+    protected boolean isWorkDirBucket(Path source) {
+        if( !workDir?.bucket ) return false
+        try {
+            String uri = toS3Uri(source)
+            // Normalise workDir.bucket to trailing-slash form for prefix comparison.
+            String base = workDir.bucket.endsWith('/') ? workDir.bucket : (workDir.bucket + '/')
+            return uri.startsWith(base)
+        } catch (Exception ignored) {
+            return false
         }
     }
 

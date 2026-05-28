@@ -83,17 +83,56 @@ class NomadS5cmdPlugin extends BasePlugin implements PluginAbstractExec {
     }
 
     private void validateS5cmdBinary() {
+        // 1. Try PATH first (fast path — normal install or --dev-plugins bin-* loop has already run)
         try {
             def proc = ['s5cmd', 'version'].execute()
             proc.waitFor()
             if (proc.exitValue() == 0) {
                 def version = proc.text.readLines().first()
                 log.info("nf-s5cmd: Found ${version}")
-            } else {
-                log.warn("nf-s5cmd: s5cmd binary returned non-zero exit; staging via s5cmd will fail at runtime.")
+                return
             }
-        } catch (IOException e) {
-            log.warn("nf-s5cmd: s5cmd binary not found on PATH. The plugin will still load, but tasks that hit s5cmd staging will fail until the binary is installed.")
+        } catch (IOException ignored) {
+            // Not on PATH — fall through to fallback probes
         }
+
+        // 2. Probe well-known fallback locations used by the abc-cluster operator toolchain.
+        //    These are consulted in priority order; the first one that executes wins.
+        //    - /local/bin-s5cmd/s5cmd — placed by abc-cluster-cli --dev-plugins on the head container
+        //    - /local/bin-*/s5cmd     — glob covers any variant bin directory from the entrypoint loop
+        //    - /nxf-work/bin/s5cmd    — host-volume path used by worker bootstrap scripts
+        List<String> fallbackDirs = ['/local', '/nxf-work/bin']
+        List<String> candidates = [
+            '/local/bin-s5cmd/s5cmd',
+            '/nxf-work/bin/s5cmd',
+        ]
+
+        // Also glob /local/bin-*/s5cmd at runtime
+        try {
+            new File('/local').listFiles()?.each { f ->
+                if (f.isDirectory() && f.name.startsWith('bin-')) {
+                    candidates.add("${f.absolutePath}/s5cmd")
+                }
+            }
+        } catch (Exception ignored) {}
+
+        for (String candidate : candidates) {
+            File bin = new File(candidate)
+            if (!bin.exists() || !bin.canExecute()) continue
+            try {
+                def proc = [candidate, 'version'].execute()
+                proc.waitFor()
+                if (proc.exitValue() == 0) {
+                    def version = proc.text.readLines().first()
+                    log.info("nf-s5cmd: Found ${version} at ${candidate} (not on PATH — using absolute path)")
+                    return
+                }
+            } catch (IOException ignored2) {}
+        }
+
+        log.warn("nf-s5cmd: s5cmd binary not found on PATH or in known fallback locations " +
+            "(/local/bin-s5cmd/, /nxf-work/bin/). " +
+            "The plugin will still load, but tasks that require s5cmd staging will fail at runtime. " +
+            "Ensure s5cmd is installed or use `abc pipeline run --dev-plugins` to provision it automatically.")
     }
 }

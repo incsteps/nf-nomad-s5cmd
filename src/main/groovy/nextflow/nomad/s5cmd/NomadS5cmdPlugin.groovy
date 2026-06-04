@@ -96,9 +96,9 @@ class NomadS5cmdPlugin extends BasePlugin implements PluginAbstractExec {
             // Not on PATH — fall through to fallback probes
         }
 
-        // 2. Probe well-known fallback locations used by the abc-cluster operator toolchain.
-        //    These are consulted in priority order; the first one that executes wins.
-        //    - /local/bin-s5cmd/s5cmd — placed by abc-cluster-cli --dev-plugins on the head container
+        // 2. Probe well-known fallback locations (operator toolchains may place
+        //    s5cmd off-PATH). Consulted in priority order; first executable wins.
+        //    - /local/bin-s5cmd/s5cmd — common dev-plugins location on the head container
         //    - /local/bin-*/s5cmd     — glob covers any variant bin directory from the entrypoint loop
         //    - /nxf-work/bin/s5cmd    — host-volume path used by worker bootstrap scripts
         List<String> fallbackDirs = ['/local', '/nxf-work/bin']
@@ -133,6 +133,6 @@ class NomadS5cmdPlugin extends BasePlugin implements PluginAbstractExec {
         log.warn("nf-s5cmd: s5cmd binary not found on PATH or in known fallback locations " +
             "(/local/bin-s5cmd/, /nxf-work/bin/). " +
             "The plugin will still load, but tasks that require s5cmd staging will fail at runtime. " +
-            "Ensure s5cmd is installed or use `abc pipeline run --dev-plugins` to provision it automatically.")
+            "Ensure s5cmd is installed and on PATH (or at /nxf-work/bin/s5cmd).")
     }
 }

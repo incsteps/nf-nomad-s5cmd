@@ -273,10 +273,10 @@ a host volume.
 `s5cmd` must be pre-installed inside the host volume's source directory on
 every Nomad client, under a `bin/` sub-directory that the bootstrap script
 adds to `PATH`.  Example for a host volume whose source path is
-`/opt/abc-seedling/nf-work`:
+`/opt/nomad/scratch/nf-work`:
 
 ```
-/opt/abc-seedling/nf-work/bin/s5cmd    ← must be executable
+/opt/nomad/scratch/nf-work/bin/s5cmd    ← must be executable
 ```
 
 The bootstrap script prepends `<volume-mount>/bin` to `PATH` before any

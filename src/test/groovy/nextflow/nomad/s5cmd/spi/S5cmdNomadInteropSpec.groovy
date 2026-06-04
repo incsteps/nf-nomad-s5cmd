@@ -271,7 +271,7 @@ class S5cmdNomadInteropSpec extends Specification {
         String script = interop.submitCommand[2]
 
         then:
-        script.contains('export PATH="/nxf-work/bin:/opt/abc/bin')
+        script.contains('export PATH="/nxf-work/bin:')
     }
 
     def 'bootstrap script pulls .command.* down then runs the task then pushes everything back'() {

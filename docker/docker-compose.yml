@@ -37,7 +37,6 @@ services:
         target: /var/run/docker.sock
       - ./nomad-data:/data
       - ./init-nomad.sh:/usr/local/bin/init-nomad.sh
-      - /opt/abc/bin/:/opt/abc/bin/:rw
     networks:
       - nomad-s5cmd
 

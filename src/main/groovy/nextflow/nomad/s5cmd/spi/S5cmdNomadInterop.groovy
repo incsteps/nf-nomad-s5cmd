@@ -511,8 +511,8 @@ class S5cmdNomadInterop implements DistributedWorkdirProvider {
      * <p>The worker's inline s5cmd invocations use {@code s5cmdCall}, which
      * is the full {@code s5cmd [global-flags]} string captured at script
      * generation time.  This is necessary because the global flags
-     * (in particular {@code --no-verify-ssl} for private-CA endpoints such as
-     * the ABC-cluster seedling's MinIO) are not expressible via env vars and
+     * (in particular {@code --no-verify-ssl} for private-CA S3 endpoints such
+     * as a self-hosted MinIO / RustFS) are not expressible via env vars and
      * must appear on every s5cmd command line.</p>
      */
     protected String bootstrapScript() {
@@ -536,7 +536,7 @@ class S5cmdNomadInterop implements DistributedWorkdirProvider {
         return """\
 set -uo pipefail
 
-export PATH="/nxf-work/bin:/opt/abc/bin:\$\${PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
+export PATH="/nxf-work/bin:\$\${PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
 TASK_DIR="${TASK_DIR_VAR}"
 mkdir -p "\$TASK_DIR" && cd "\$TASK_DIR"
 
@@ -561,7 +561,7 @@ log "bootstrap start; pwd=\$PWD; hostname=\$\${HOSTNAME:-?}"
 # Structured identity log — picked up by Promtail + label-promotion rules to
 # feed Loki, so queries like `{nf_session="<id>"}` find every task's lines.
 # Empty fields print as the literal `-` so the line shape stays parseable.
-echo "[nf-task] start session=\$\${NF_SESSION_ID:--} session_name=\$\${NF_SESSION_NAME:--} head_job=\$\${NF_HEAD_JOB_ID:--} head_alloc=\$\${NF_HEAD_ALLOC_ID:--} process=\$\${NF_PROCESS_NAME:--} task=\$\${NF_TASK_HASH:--} user=\$\${ABC_USER:--}/\$\${ABC_USER_ID:--} workspace=\$\${ABC_WORKSPACE:--} tenant=\$\${ABC_TENANT:--} run=\$\${ABC_RUN_NAME:--}" >&2
+echo "[nf-task] start session=\$\${NF_SESSION_ID:--} session_name=\$\${NF_SESSION_NAME:--} head_job=\$\${NF_HEAD_JOB_ID:--} head_alloc=\$\${NF_HEAD_ALLOC_ID:--} process=\$\${NF_PROCESS_NAME:--} task=\$\${NF_TASK_HASH:--}" >&2
 log "PATH=\$PATH"
 log "s5cmd at /nxf-work/bin/s5cmd:"
 ls -la /nxf-work/bin/s5cmd >> "\$NF_DBG" 2>&1 || log "  /nxf-work/bin/s5cmd MISSING"

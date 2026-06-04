@@ -174,19 +174,82 @@ class S5cmdFileCopyStrategySpec extends Specification {
 
     // ── stage-out is delegated to bootstrap (no per-file unstage) ─────────
 
-    def 'getUnstageOutputFilesScript returns a no-op comment (bootstrap pushes outputs)'() {
+    def 'getUnstageOutputFilesScript returns only comments when no inputs were staged'() {
         given:
         def s = makeStrategy([])
 
-        when:
+        when: 'no getStageInputFilesScript call → nothing recorded to clean up'
         String script = s.getUnstageOutputFilesScript(['out.txt'], tempDir)
 
         then:
         script.contains('# nf-s5cmd:')
         script.contains('bootstrap')
-        // Crucially: no executable lines — only the comment.
-        // (The comment text mentions 's5cmd cp' so we can't grep for that;
-        // instead, every non-blank line must start with '#'.)
+        // No executable lines — only comments. (The comment text mentions
+        // 's5cmd cp', so assert every non-blank line starts with '#'.)
+        script.readLines().findAll { it.trim() }.every { it.trim().startsWith('#') }
+    }
+
+    // ── staged-input cleanup (cleanupLocal, default on) ───────────────────
+
+    def 'getUnstageOutputFilesScript frees staged inputs after stage-in (inputs only)'() {
+        given:
+        def s = makeStrategy([])
+        def f1 = tempDir.resolve('reads.fq'); Files.writeString(f1, 'x')
+        def f2 = tempDir.resolve('ref.fa');   Files.writeString(f2, 'y')
+        s.getStageInputFilesScript(['reads.fq': f1, 'ref.fa': f2])   // records staged names
+
+        when:
+        String script = s.getUnstageOutputFilesScript(['result.bam'], tempDir)
+
+        then: 'both inputs removed; the output never removed'
+        script.contains("rm -rf -- './reads.fq'")
+        script.contains("rm -rf -- './ref.fa'")
+        !script.contains("rm -rf -- './result.bam'")
+    }
+
+    def 'getUnstageOutputFilesScript keeps an input that is also a declared output (in-place)'() {
+        given:
+        def s = makeStrategy([])
+        def f = tempDir.resolve('inplace.txt'); Files.writeString(f, 'x')
+        s.getStageInputFilesScript(['inplace.txt': f])
+
+        when: 'inplace.txt is BOTH an input and an output'
+        String script = s.getUnstageOutputFilesScript(['inplace.txt'], tempDir)
+
+        then: 'it must NOT be removed (would corrupt the output)'
+        !script.contains("rm -rf -- './inplace.txt'")
+    }
+
+    def 'getUnstageOutputFilesScript covers directory inputs with rm -rf'() {
+        given:
+        def s = makeStrategy([])
+        def dir = tempDir.resolve('index'); Files.createDirectory(dir)
+        s.getStageInputFilesScript(['index': dir])
+
+        when:
+        String script = s.getUnstageOutputFilesScript([], tempDir)
+
+        then:
+        script.contains("rm -rf -- './index'")
+    }
+
+    def 'getUnstageOutputFilesScript skips cleanup when workDir.cleanupLocal = false'() {
+        given:
+        def cfg = S5cmdConfig.fromMap(
+            s3: [endpoint: 'http://rustfs:9900', usePathStyle: true, accessKeyId: 'AK', secretAccessKey: 'SK'],
+            cp: [concurrency: 4, numWorkers: 32, retryCount: 5, logLevel: 'info'],
+            workDir: [cleanupLocal: false],
+        )
+        def s = new S5cmdFileCopyStrategy(cfg, tempDir, tempDir, 'copy', 'copy',
+                's3://nextflow-work/sessions/abc/ab/cdef1234/')
+        def f = tempDir.resolve('reads.fq'); Files.writeString(f, 'x')
+        s.getStageInputFilesScript(['reads.fq': f])
+
+        when:
+        String script = s.getUnstageOutputFilesScript([], tempDir)
+
+        then: 'no rm — only comments'
+        !script.contains('rm -rf')
         script.readLines().findAll { it.trim() }.every { it.trim().startsWith('#') }
     }
 }

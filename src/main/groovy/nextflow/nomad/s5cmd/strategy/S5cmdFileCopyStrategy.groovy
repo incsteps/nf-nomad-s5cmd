@@ -58,6 +58,10 @@ class S5cmdFileCopyStrategy implements ScriptFileCopyStrategy {
     /** S3 URL of the per-task remote dir with trailing slash, e.g. {@code s3://bucket/prefix/NN/HASH/}. */
     private final String remoteTaskDirUrl
 
+    /** Stage names recorded by {@link #getStageInputFilesScript} so the unstage
+     *  step can free the local input copies after the task (never outputs). */
+    private final List<String> stagedInputNames = []
+
     S5cmdFileCopyStrategy(S5cmdConfig config,
                           Path workDir,
                           Path targetDir,
@@ -101,6 +105,7 @@ class S5cmdFileCopyStrategy implements ScriptFileCopyStrategy {
         for( entry in inputFiles.entrySet() ) {
             String stageName = entry.key
             java.nio.file.Path source = entry.value
+            stagedInputNames << stageName   // remembered for the unstage cleanup
             // Directories were uploaded with the recursive form by the operator
             // side (S5cmdNomadInterop.uploadInputFiles); mirror that here so
             // the worker pulls every file under the prefix into ./<stageName>/.
@@ -126,7 +131,26 @@ class S5cmdFileCopyStrategy implements ScriptFileCopyStrategy {
         // Outputs are pushed back by S5cmdNomadInterop's bootstrap script
         // (s5cmd cp ./ "$NXF_S5CMD_REMOTE_WORKDIR") after the task exits.
         // No per-file unstage needed inside .command.run.
-        return '# nf-s5cmd: outputs pushed back by bootstrap (recursive s5cmd cp)\n'
+        StringBuilder sb = new StringBuilder()
+        sb.append('# nf-s5cmd: outputs pushed back by bootstrap (recursive s5cmd cp)\n')
+
+        // Free the staged INPUT copies before that push-back: reclaims local node
+        // disk immediately and keeps inputs out of the worker→S3 re-upload (the
+        // head already placed them under the per-task inputs/ on S3). Outputs and
+        // the -resume cache are never touched. An input that is ALSO a declared
+        // output (in-place modification, same stage name) is kept.
+        if( config.workDir.cleanupLocal && stagedInputNames ) {
+            Set<String> outs = outputFiles ? new HashSet<String>(outputFiles) : new HashSet<String>()
+            List<String> toRemove = new ArrayList<String>()
+            for( String name : stagedInputNames )
+                if( !outs.contains(name) ) toRemove.add(name)
+            if( toRemove ) {
+                sb.append('# nf-s5cmd: free staged inputs (inputs only; outputs + -resume cache kept)\n')
+                for( String name : toRemove )
+                    sb.append("rm -rf -- './${name}'\n")
+            }
+        }
+        return sb.toString()
     }
 
     @Override String touchFile(Path path) { fallback.touchFile(path) }

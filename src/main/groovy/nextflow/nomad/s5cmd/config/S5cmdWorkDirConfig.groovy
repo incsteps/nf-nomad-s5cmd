@@ -44,12 +44,22 @@ class S5cmdWorkDirConfig {
     /** How long to poll the remote {@code .exitcode} marker before giving up. */
     Duration completionTimeout = Duration.of('60s')
 
+    /**
+     * Delete staged INPUT files from the local task dir after the task finishes,
+     * before the bootstrap pushes results to S3. Frees node disk immediately and
+     * avoids re-uploading inputs (the head already placed them on S3). Outputs and
+     * the {@code -resume} cache are never touched — only inputs that are not also
+     * declared as outputs are removed. Default on.
+     */
+    boolean cleanupLocal = true
+
     static S5cmdWorkDirConfig fromMap(Map<String, Object> map) {
         def cfg = new S5cmdWorkDirConfig()
         if( map == null ) return cfg
         if( map.containsKey('enabled') ) cfg.enabled = (boolean) map.enabled
         if( map.containsKey('bucket') )  cfg.bucket  = ((String) map.bucket)?.trim() ?: null
         if( map.containsKey('prefix') )  cfg.prefix  = ((String) map.prefix)?.trim() ?: null
+        if( map.containsKey('cleanupLocal') ) cfg.cleanupLocal = (boolean) map.cleanupLocal
         if( map.containsKey('completionTimeout') ) {
             cfg.completionTimeout = Duration.of(map.completionTimeout.toString())
         }

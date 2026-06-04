@@ -25,6 +25,16 @@ class S5cmdWorkDirConfigSpec extends Specification {
         cfg.bucket == null
         cfg.prefix == null
         cfg.completionTimeout == Duration.of('60s')
+        cfg.cleanupLocal          // default on
+        cfg.cleanupRemoteInputs   // default on
+    }
+
+    def 'fromMap parses cleanup flags (default on; overridable)'() {
+        expect:
+        S5cmdWorkDirConfig.fromMap([:]).cleanupLocal
+        S5cmdWorkDirConfig.fromMap([:]).cleanupRemoteInputs
+        !S5cmdWorkDirConfig.fromMap(cleanupLocal: false).cleanupLocal
+        !S5cmdWorkDirConfig.fromMap(cleanupRemoteInputs: false).cleanupRemoteInputs
     }
 
     def 'fromMap with null returns a default-config instance'() {

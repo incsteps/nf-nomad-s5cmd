@@ -15,6 +15,7 @@ import groovy.util.logging.Slf4j
 import nextflow.Session
 import nextflow.nomad.s5cmd.config.S5cmdConfig
 import nextflow.nomad.s5cmd.config.S5cmdConfigLocator
+import nextflow.nomad.s5cmd.strategy.S5cmdCommandBuilder
 import nextflow.trace.TraceObserverV2
 
 /**
@@ -56,8 +57,39 @@ class S5cmdTransferObserver implements TraceObserverV2 {
 
     @Override
     void onFlowComplete() {
-        if( config?.enabled ) {
-            log.info('nf-s5cmd: session complete')
+        if( !config?.enabled ) return
+        log.info('nf-s5cmd: session complete')
+        sweepRemoteInputs()
+    }
+
+    /**
+     * End-of-run reclamation: delete the per-task {@code inputs/} dirs from the S3
+     * work dir. Those staged inputs were needed only DURING the run (worker
+     * stage-in + retries); {@code -resume} reuses task OUTPUTS, never inputs, so
+     * removing them is safe and frees S3 space. Best-effort — never fails the run.
+     */
+    protected void sweepRemoteInputs() {
+        if( !config.workDir.enabled || !config.workDir.cleanupRemoteInputs ) return
+        String root = config.workDir.rootUrl()
+        if( !root ) return
+        try {
+            S5cmdCommandBuilder b = new S5cmdCommandBuilder(config)
+            // Matches s3://<bucket>/<prefix>/<NN>/<HASH>/inputs/<...> across the session.
+            String cmd = b.buildRemove(root + '*/inputs/*')
+            String exports = b.envExports()
+            String full = exports ? (exports + '\n' + cmd) : cmd
+            Process p = ['bash', '-c', full].execute()
+            StringBuffer out = new StringBuffer()
+            StringBuffer err = new StringBuffer()
+            p.consumeProcessOutput(out, err)
+            int rc = p.waitFor()
+            if( rc == 0 )
+                log.info("nf-s5cmd: swept staged inputs/ from ${root}")
+            else
+                log.warn("nf-s5cmd: input sweep rc=${rc} (non-fatal; e.g. no inputs to remove): ${err.toString().trim()}")
+        }
+        catch( Exception e ) {
+            log.warn("nf-s5cmd: input sweep failed (non-fatal): ${e.message}")
         }
     }
 }

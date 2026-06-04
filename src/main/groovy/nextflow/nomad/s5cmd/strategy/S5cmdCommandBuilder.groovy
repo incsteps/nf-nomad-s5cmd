@@ -65,6 +65,15 @@ class S5cmdCommandBuilder {
     }
 
     /**
+     * Build an `rm` command for an S3 URL, which may contain s5cmd wildcards
+     * (e.g. {@code s3://bucket/prefix/*​/inputs/*}). Used by the end-of-run
+     * input sweep.
+     */
+    String buildRemove(String url) {
+        return "${global()} rm ${quote(url)}"
+    }
+
+    /**
      * Bash snippet that exports AWS_* / S3_* env vars from the config.
      * Emitted ONCE per task before any cp call. Fields left null on the
      * config skip their export, so an existing env var (from the docker

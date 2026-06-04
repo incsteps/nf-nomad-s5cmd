@@ -30,6 +30,23 @@ class S5cmdCommandBuilderSpec extends Specification {
         cmd == "s5cmd --endpoint-url http://rustfs.aither:9900 --log info -r 7 -numworkers 128 cp -c 4 's3://b/key one.fq' '/tmp/out file.fq'"
     }
 
+    def 'buildRemove renders global flags + rm with a quoted (wildcard) url'() {
+        given:
+        def cfg = S5cmdConfig.fromMap(
+            s3: [endpoint: 'http://rustfs.aither:9900'],
+            cp: [numWorkers: 128, retryCount: 7, logLevel: 'info'])
+        def builder = new S5cmdCommandBuilder(cfg)
+
+        when:
+        def cmd = builder.buildRemove('s3://nextflow-work/sessions/abc/*/inputs/*')
+
+        then:
+        cmd.startsWith('s5cmd ')
+        cmd.contains('--endpoint-url http://rustfs.aither:9900')
+        cmd.contains("rm 's3://nextflow-work/sessions/abc/*/inputs/*'")
+        !cmd.contains(' cp ')
+    }
+
     def 'buildCopy emits --no-verify-ssl when useTLS=false'() {
         given:
         def cfg = S5cmdConfig.fromMap(

@@ -53,6 +53,14 @@ class S5cmdWorkDirConfig {
      */
     boolean cleanupLocal = true
 
+    /**
+     * After the workflow completes, delete the per-task {@code inputs/} dirs from
+     * the S3 work dir (the head-uploaded staged inputs — dead once the run ends,
+     * since {@code -resume} reuses task outputs, never inputs). Reclaims S3 space.
+     * Default on.
+     */
+    boolean cleanupRemoteInputs = true
+
     static S5cmdWorkDirConfig fromMap(Map<String, Object> map) {
         def cfg = new S5cmdWorkDirConfig()
         if( map == null ) return cfg
@@ -60,6 +68,7 @@ class S5cmdWorkDirConfig {
         if( map.containsKey('bucket') )  cfg.bucket  = ((String) map.bucket)?.trim() ?: null
         if( map.containsKey('prefix') )  cfg.prefix  = ((String) map.prefix)?.trim() ?: null
         if( map.containsKey('cleanupLocal') ) cfg.cleanupLocal = (boolean) map.cleanupLocal
+        if( map.containsKey('cleanupRemoteInputs') ) cfg.cleanupRemoteInputs = (boolean) map.cleanupRemoteInputs
         if( map.containsKey('completionTimeout') ) {
             cfg.completionTimeout = Duration.of(map.completionTimeout.toString())
         }

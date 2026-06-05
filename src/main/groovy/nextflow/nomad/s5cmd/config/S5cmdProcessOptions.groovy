@@ -40,7 +40,7 @@ import nextflow.processor.TaskRun
  * lists in Nextflow config are conventionally complete declarations, not
  * partial updates.
  *
- * <p>Returns the merged map. nf-s5cmd then constructs a fresh
+ * <p>Returns the merged map. nf-nomad-s5cmd then constructs a fresh
  * {@link S5cmdConfig} from that map — no other code path needs to know
  * about the per-task overlay.</p>
  */

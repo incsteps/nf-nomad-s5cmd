@@ -91,7 +91,7 @@ class S5cmdFileCopyStrategy implements ScriptFileCopyStrategy {
         String exports = cmdBuilder.envExports()
         String base = fallback.getBeforeStartScript() ?: ''
         StringBuilder sb = new StringBuilder()
-        sb.append('# nf-s5cmd: stage-in/out env\n')
+        sb.append('# nf-nomad-s5cmd: stage-in/out env\n')
         if( exports ) { sb.append(exports); sb.append('\n') }
         if( base ) { sb.append(base); sb.append('\n') }
         return sb.toString()
@@ -101,7 +101,7 @@ class S5cmdFileCopyStrategy implements ScriptFileCopyStrategy {
     String getStageInputFilesScript(Map<String, Path> inputFiles) {
         if( !inputFiles ) return ''
         StringBuilder sb = new StringBuilder()
-        sb.append('# nf-s5cmd: stage-in (s5cmd cp from per-task remote dir)\n')
+        sb.append('# nf-nomad-s5cmd: stage-in (s5cmd cp from per-task remote dir)\n')
         for( entry in inputFiles.entrySet() ) {
             String stageName = entry.key
             java.nio.file.Path source = entry.value
@@ -132,7 +132,7 @@ class S5cmdFileCopyStrategy implements ScriptFileCopyStrategy {
         // (s5cmd cp ./ "$NXF_S5CMD_REMOTE_WORKDIR") after the task exits.
         // No per-file unstage needed inside .command.run.
         StringBuilder sb = new StringBuilder()
-        sb.append('# nf-s5cmd: outputs pushed back by bootstrap (recursive s5cmd cp)\n')
+        sb.append('# nf-nomad-s5cmd: outputs pushed back by bootstrap (recursive s5cmd cp)\n')
 
         // Free the staged INPUT copies before that push-back: reclaims local node
         // disk immediately and keeps inputs out of the worker→S3 re-upload (the
@@ -145,7 +145,7 @@ class S5cmdFileCopyStrategy implements ScriptFileCopyStrategy {
             for( String name : stagedInputNames )
                 if( !outs.contains(name) ) toRemove.add(name)
             if( toRemove ) {
-                sb.append('# nf-s5cmd: free staged inputs (inputs only; outputs + -resume cache kept)\n')
+                sb.append('# nf-nomad-s5cmd: free staged inputs (inputs only; outputs + -resume cache kept)\n')
                 for( String name : toRemove )
                     sb.append("rm -rf -- './${name}'\n")
             }

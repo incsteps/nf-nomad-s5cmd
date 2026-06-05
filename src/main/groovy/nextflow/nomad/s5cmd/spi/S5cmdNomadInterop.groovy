@@ -26,7 +26,7 @@ import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * nf-s5cmd's distributed-workdir backend for nf-nomad. Registered via the
+ * nf-nomad-s5cmd's distributed-workdir backend for nf-nomad. Registered via the
  * {@link S5cmdNomadInteropFactory} PF4J extension — nf-nomad picks it up
  * through {@code Plugins.getExtensions(DistributedWorkdirProviderFactory.class)}.
  *
@@ -151,7 +151,7 @@ class S5cmdNomadInterop implements DistributedWorkdirProvider {
         s5cmdConfig.validate()
         if( !workDir.bucket ) {
             throw new ProcessSubmitException(
-                '[NOMAD] nf-s5cmd workDir.enabled=true but `s5cmd.workDir.bucket` is missing')
+                '[NOMAD] nf-nomad-s5cmd workDir.enabled=true but `s5cmd.workDir.bucket` is missing')
         }
     }
 
@@ -165,11 +165,11 @@ class S5cmdNomadInterop implements DistributedWorkdirProvider {
         String fromSession = relativePathFromSessionWorkDir(task.workDir, sessionWorkDir)
         if( !fromSession ) {
             throw new ProcessSubmitException(
-                "[NOMAD] nf-s5cmd interop requires task workDir `${task.workDir}` to be nested under session workDir `${sessionWorkDir}`")
+                "[NOMAD] nf-nomad-s5cmd interop requires task workDir `${task.workDir}` to be nested under session workDir `${sessionWorkDir}`")
         }
         if( !isNextflowWorkPathLayout(fromSession) ) {
             throw new ProcessSubmitException(
-                "[NOMAD] nf-s5cmd interop requires Nextflow workDir layout `NN/HASH`; found `${fromSession}`")
+                "[NOMAD] nf-nomad-s5cmd interop requires Nextflow workDir layout `NN/HASH`; found `${fromSession}`")
         }
         return fromSession
     }
@@ -211,7 +211,7 @@ class S5cmdNomadInterop implements DistributedWorkdirProvider {
     protected void uploadBinDirs() {
         List<Path> binDirs = resolveBinDirs()
         if( !binDirs ) {
-            log.debug "[NOMAD] nf-s5cmd: no pipeline bin/ dirs for task `${task?.name}`"
+            log.debug "[NOMAD] nf-nomad-s5cmd: no pipeline bin/ dirs for task `${task?.name}`"
             return
         }
         String sessionId = resolveSessionId()
@@ -229,16 +229,16 @@ class S5cmdNomadInterop implements DistributedWorkdirProvider {
             // each upload once (different sessionIds → different keys).
             String key = src
             if( !uploaded.add(key) ) {
-                log.debug "[NOMAD] nf-s5cmd: bin dir `${binDir}` already uploaded for session ${sessionId}; skipping"
+                log.debug "[NOMAD] nf-nomad-s5cmd: bin dir `${binDir}` already uploaded for session ${sessionId}; skipping"
                 continue
             }
-            log.info "[NOMAD] nf-s5cmd: uploading pipeline bin dir `${binDir}` to ${dst} (session=${sessionId})"
+            log.debug "[NOMAD] nf-nomad-s5cmd: uploading pipeline bin dir `${binDir}` to ${dst} (session=${sessionId})"
             String cmd = cmdBuilder.buildCopyDir(src, dst, true)
             try {
                 runShell(prefixWithEnvExports(cmd))
             }
             catch (Exception e) {
-                log.warn "[NOMAD] nf-s5cmd: failed to upload pipeline bin dir `${binDir}` (${e.message}); pipeline scripts may not be available on workers"
+                log.warn "[NOMAD] nf-nomad-s5cmd: failed to upload pipeline bin dir `${binDir}` (${e.message}); pipeline scripts may not be available on workers"
                 uploaded.remove(key)   // allow retry on next task
             }
         }
@@ -293,7 +293,7 @@ class S5cmdNomadInterop implements DistributedWorkdirProvider {
         try {
             sess = task.processor?.session
         } catch (Throwable t) {
-            log.debug "[NOMAD] nf-s5cmd: cannot reach task.processor.session — ${t.message}"
+            log.debug "[NOMAD] nf-nomad-s5cmd: cannot reach task.processor.session — ${t.message}"
             return out
         }
         if( sess == null ) return out
@@ -304,7 +304,7 @@ class S5cmdNomadInterop implements DistributedWorkdirProvider {
                 for( Object p : (List) multi ) if( p instanceof Path ) out.add((Path) p)
             }
         } catch (Throwable t) {
-            log.debug "[NOMAD] nf-s5cmd: session.getBinDirs() failed — ${t.message}"
+            log.debug "[NOMAD] nf-nomad-s5cmd: session.getBinDirs() failed — ${t.message}"
         }
         // Older API: getBinDir() → Path
         if( out.isEmpty() ) {
@@ -312,7 +312,7 @@ class S5cmdNomadInterop implements DistributedWorkdirProvider {
                 Object single = sess.getBinDir()
                 if( single instanceof Path ) out.add((Path) single)
             } catch (Throwable t) {
-                log.debug "[NOMAD] nf-s5cmd: session.getBinDir() failed — ${t.message}"
+                log.debug "[NOMAD] nf-nomad-s5cmd: session.getBinDir() failed — ${t.message}"
             }
         }
         return out
@@ -355,7 +355,7 @@ class S5cmdNomadInterop implements DistributedWorkdirProvider {
             inputFiles = (Map<String, Path>) task.getInputFilesMap()
         }
         catch (Exception e) {
-            log.debug "[NOMAD] nf-s5cmd: unable to retrieve task input files map (${e.message}); skipping input upload"
+            log.debug "[NOMAD] nf-nomad-s5cmd: unable to retrieve task input files map (${e.message}); skipping input upload"
             return
         }
         if( !inputFiles ) return
@@ -417,7 +417,7 @@ class S5cmdNomadInterop implements DistributedWorkdirProvider {
      */
     protected void uploadExternalS3Input(Path source, String stageName, String inputsBase) {
         String srcUri = toS3Uri(source)
-        log.info "[NOMAD] nf-s5cmd: external S3 input '${stageName}' (${srcUri}) — cross-endpoint download then upload"
+        log.debug "[NOMAD] nf-nomad-s5cmd: external S3 input '${stageName}' (${srcUri}) — cross-endpoint download then upload"
         boolean isDir = false
         try { isDir = Files.isDirectory(source) } catch (Exception ignored) {}
 
@@ -434,7 +434,7 @@ class S5cmdNomadInterop implements DistributedWorkdirProvider {
                 int rc = runShellQuiet(download)
                 if( rc != 0 ) {
                     // Retry without --no-sign-request (private external bucket)
-                    log.debug "[NOMAD] nf-s5cmd: public download failed (rc=${rc}); retrying with credentials for '${srcUri}'"
+                    log.debug "[NOMAD] nf-nomad-s5cmd: public download failed (rc=${rc}); retrying with credentials for '${srcUri}'"
                     runShell("${bin} --no-verify-ssl cp '${srcUri}/*' '${tmpDir}/'")
                 }
                 String upload = cmdBuilder.buildCopyDir(tmpDir.toString(), inputsBase + stageName + '/', true)
@@ -449,7 +449,7 @@ class S5cmdNomadInterop implements DistributedWorkdirProvider {
                 String download = "${bin} --no-verify-ssl --no-sign-request cp '${srcUri}' '${tmp}'"
                 int rc = runShellQuiet(download)
                 if( rc != 0 ) {
-                    log.debug "[NOMAD] nf-s5cmd: public download failed (rc=${rc}); retrying with credentials for '${srcUri}'"
+                    log.debug "[NOMAD] nf-nomad-s5cmd: public download failed (rc=${rc}); retrying with credentials for '${srcUri}'"
                     runShell("${bin} --no-verify-ssl cp '${srcUri}' '${tmp}'")
                 }
                 String upload = cmdBuilder.buildCopy(tmp.toString(), inputsBase + stageName, true)
@@ -544,7 +544,7 @@ mkdir -p "\$TASK_DIR" && cd "\$TASK_DIR"
 # by the EXIT trap below, so we always have visibility on worker behaviour.
 NF_DBG=.nxf-debug.log
 : > "\$NF_DBG"
-log() { printf '[nf-s5cmd %s] %s\\n' "\$(date -u +%H:%M:%S)" "\$*" >> "\$NF_DBG" ; }
+log() { printf '[nf-nomad-s5cmd %s] %s\\n' "\$(date -u +%H:%M:%S)" "\$*" >> "\$NF_DBG" ; }
 
 push_debug_then_exit() {
   rc=\$?
@@ -654,7 +654,7 @@ exit "\$_exit_code"
             Files.deleteIfExists(tmp)
             return txt ? Integer.parseInt(txt) : null
         } catch (Exception e) {
-            log.debug("[NOMAD] nf-s5cmd readRemoteExitCode failed (transient ok): ${e.message}")
+            log.debug("[NOMAD] nf-nomad-s5cmd readRemoteExitCode failed (transient ok): ${e.message}")
             return null
         }
     }
@@ -692,7 +692,7 @@ exit "\$_exit_code"
         proc.waitFor()
         if( proc.exitValue() != 0 ) {
             throw new ProcessSubmitException(
-                "[NOMAD] nf-s5cmd command failed (rc=${proc.exitValue()}): ${cmdline}\n${err}")
+                "[NOMAD] nf-nomad-s5cmd command failed (rc=${proc.exitValue()}): ${cmdline}\n${err}")
         }
     }
 

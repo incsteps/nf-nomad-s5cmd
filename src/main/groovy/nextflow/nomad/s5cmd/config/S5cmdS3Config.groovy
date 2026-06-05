@@ -15,10 +15,10 @@ import groovy.transform.CompileStatic
 import groovy.util.logging.Slf4j
 
 /**
- * S3 connection parameters for nf-s5cmd. Every field is optional and
+ * S3 connection parameters for nf-nomad-s5cmd. Every field is optional and
  * falls back to the conventional AWS chain (env vars, ~/.aws/credentials,
  * IMDS) when omitted — meaning a pipeline running on EC2/EKS with an
- * instance-profile gets nf-s5cmd "for free" with an empty s3 {} block.
+ * instance-profile gets nf-nomad-s5cmd "for free" with an empty s3 {} block.
  *
  * For non-AWS endpoints (MinIO, rustfs, Ceph RGW, Wasabi) you typically
  * need: endpoint + region + accessKeyId + secretAccessKey + usePathStyle=true.
@@ -83,7 +83,7 @@ class S5cmdS3Config {
 
         def unknown = map.keySet().findAll { !(KNOWN_KEYS.contains((String) it)) }
         if( unknown ) {
-            log.warn("nf-s5cmd: unknown s3{} key(s): ${unknown} — supported: ${KNOWN_KEYS.toList().sort()}")
+            log.warn("nf-nomad-s5cmd: unknown s3{} key(s): ${unknown} — supported: ${KNOWN_KEYS.toList().sort()}")
         }
         return cfg
     }
@@ -91,10 +91,10 @@ class S5cmdS3Config {
     void validate() {
         if( endpoint && !endpoint.startsWith('http://') && !endpoint.startsWith('https://') ) {
             throw new IllegalArgumentException(
-                "nf-s5cmd: s3.endpoint must include scheme (http:// or https://); got '${endpoint}'")
+                "nf-nomad-s5cmd: s3.endpoint must include scheme (http:// or https://); got '${endpoint}'")
         }
         if( profile && (accessKeyId || secretAccessKey) ) {
-            log.warn("nf-s5cmd: s3.profile and s3.accessKeyId/secretAccessKey are mutually exclusive — profile will win")
+            log.warn("nf-nomad-s5cmd: s3.profile and s3.accessKeyId/secretAccessKey are mutually exclusive — profile will win")
         }
     }
 }

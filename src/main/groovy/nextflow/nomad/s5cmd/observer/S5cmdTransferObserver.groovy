@@ -58,7 +58,7 @@ class S5cmdTransferObserver implements TraceObserverV2 {
     @Override
     void onFlowComplete() {
         if( !config?.enabled ) return
-        log.info('nf-s5cmd: session complete')
+        log.debug('nf-nomad-s5cmd: session complete')
         sweepRemoteInputs()
     }
 
@@ -84,12 +84,12 @@ class S5cmdTransferObserver implements TraceObserverV2 {
             p.consumeProcessOutput(out, err)
             int rc = p.waitFor()
             if( rc == 0 )
-                log.info("nf-s5cmd: swept staged inputs/ from ${root}")
+                log.debug("nf-nomad-s5cmd: swept staged inputs/ from ${root}")
             else
-                log.warn("nf-s5cmd: input sweep rc=${rc} (non-fatal; e.g. no inputs to remove): ${err.toString().trim()}")
+                log.warn("nf-nomad-s5cmd: input sweep rc=${rc} (non-fatal; e.g. no inputs to remove): ${err.toString().trim()}")
         }
         catch( Exception e ) {
-            log.warn("nf-s5cmd: input sweep failed (non-fatal): ${e.message}")
+            log.warn("nf-nomad-s5cmd: input sweep failed (non-fatal): ${e.message}")
         }
     }
 }

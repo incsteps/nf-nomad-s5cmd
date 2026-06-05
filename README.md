@@ -137,7 +137,7 @@ nomad {
             numWorkers  = 64     // -numworkers
             retryCount  = 3      // -r
             partSize    = 50     // MB
-            logLevel    = 'info'
+            logLevel    = 'error' // s5cmd --log; default 'error' = quiet staging. Raise to 'info'/'debug' to debug transfers
         }
 
         // ↓↓↓ Distributed-workdir mode — opt in for non-shared-FS clusters
@@ -247,7 +247,7 @@ After either run:
 | `nomad.s5cmd.cp.numWorkers` | `64` | s5cmd `-numworkers` |
 | `nomad.s5cmd.cp.retryCount` | `3` | s5cmd `-r` |
 | `nomad.s5cmd.cp.partSize` | `50` | MB |
-| `nomad.s5cmd.cp.logLevel` | `info` | `debug` / `info` / `warn` (s5cmd expects lowercase) |
+| `nomad.s5cmd.cp.logLevel` | `error` | s5cmd `--log`: `trace` / `debug` / `info` / `error` (lowercase). Default `error` keeps staging quiet so it doesn't overshadow task/Nextflow stdout |
 | `nomad.s5cmd.workDir.enabled` | `false` | Activate SPI distributed-workdir mode |
 | `nomad.s5cmd.workDir.bucket` | — | `s3://<bucket>` root for session work-dirs |
 | `nomad.s5cmd.workDir.prefix` | — | Optional path prefix under the bucket |

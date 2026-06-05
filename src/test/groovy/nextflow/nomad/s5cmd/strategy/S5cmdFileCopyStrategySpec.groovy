@@ -182,7 +182,7 @@ class S5cmdFileCopyStrategySpec extends Specification {
         String script = s.getUnstageOutputFilesScript(['out.txt'], tempDir)
 
         then:
-        script.contains('# nf-s5cmd:')
+        script.contains('# nf-nomad-s5cmd:')
         script.contains('bootstrap')
         // No executable lines — only comments. (The comment text mentions
         // 's5cmd cp', so assert every non-blank line starts with '#'.)

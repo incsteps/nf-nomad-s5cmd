@@ -40,7 +40,7 @@ class NomadS5cmdPlugin extends BasePlugin implements PluginAbstractExec {
     @Override
     void start() {
         super.start()
-        log.info("nf-s5cmd plugin started (v${wrapper.descriptor.version})")
+        log.debug("nf-nomad-s5cmd plugin started (v${wrapper.descriptor.version})")
         validateS5cmdBinary()
     }
 
@@ -58,7 +58,7 @@ class NomadS5cmdPlugin extends BasePlugin implements PluginAbstractExec {
     }
 
     /**
-     * CLI command: nextflow plugin nf-s5cmd validate
+     * CLI command: nextflow plugin nf-nomad-s5cmd validate
      * Runs `s5cmd version` and a smoke `ls` to confirm the binary works.
      * Connectivity to a specific endpoint is the user's responsibility
      * (set via env/config; s5cmd needs AWS_ACCESS_KEY_ID/_SECRET_ACCESS_KEY
@@ -70,14 +70,14 @@ class NomadS5cmdPlugin extends BasePlugin implements PluginAbstractExec {
             proc.waitFor()
             if (proc.exitValue() == 0) {
                 def version = proc.text.readLines().first()
-                log.info("nf-s5cmd: ${version}")
+                log.info("nf-nomad-s5cmd: ${version}")
                 return 0
             } else {
-                log.error("nf-s5cmd: s5cmd version failed: ${proc.err.text}")
+                log.error("nf-nomad-s5cmd: s5cmd version failed: ${proc.err.text}")
                 return 1
             }
         } catch (IOException e) {
-            log.error("nf-s5cmd: s5cmd binary not found. Install s5cmd on the head node and all compute nodes (https://github.com/peak/s5cmd/releases)")
+            log.error("nf-nomad-s5cmd: s5cmd binary not found. Install s5cmd on the head node and all compute nodes (https://github.com/peak/s5cmd/releases)")
             return 127
         }
     }
@@ -89,7 +89,7 @@ class NomadS5cmdPlugin extends BasePlugin implements PluginAbstractExec {
             proc.waitFor()
             if (proc.exitValue() == 0) {
                 def version = proc.text.readLines().first()
-                log.info("nf-s5cmd: Found ${version}")
+                log.debug("nf-nomad-s5cmd: Found ${version}")
                 return
             }
         } catch (IOException ignored) {
@@ -124,13 +124,13 @@ class NomadS5cmdPlugin extends BasePlugin implements PluginAbstractExec {
                 proc.waitFor()
                 if (proc.exitValue() == 0) {
                     def version = proc.text.readLines().first()
-                    log.info("nf-s5cmd: Found ${version} at ${candidate} (not on PATH — using absolute path)")
+                    log.debug("nf-nomad-s5cmd: Found ${version} at ${candidate} (not on PATH — using absolute path)")
                     return
                 }
             } catch (IOException ignored2) {}
         }
 
-        log.warn("nf-s5cmd: s5cmd binary not found on PATH or in known fallback locations " +
+        log.warn("nf-nomad-s5cmd: s5cmd binary not found on PATH or in known fallback locations " +
             "(/local/bin-s5cmd/, /nxf-work/bin/). " +
             "The plugin will still load, but tasks that require s5cmd staging will fail at runtime. " +
             "Ensure s5cmd is installed and on PATH (or at /nxf-work/bin/s5cmd).")

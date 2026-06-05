@@ -27,7 +27,7 @@ import groovy.util.logging.Slf4j
  *   enabled = true
  *   binary  = '/usr/local/bin/s5cmd'
  *
- *   // S3 prefixes nf-s5cmd will service. Anything not matching a prefix
+ *   // S3 prefixes nf-nomad-s5cmd will service. Anything not matching a prefix
  *   // here falls through to Nextflow's default staging.
  *   paths = ['s3://my-bucket/', 's3://other-bucket/inputs/']
  *
@@ -69,14 +69,14 @@ class S5cmdConfig {
     String binary = 's5cmd'
 
     /**
-     * Ordered list of S3 URL prefixes nf-s5cmd handles for INPUT staging.
+     * Ordered list of S3 URL prefixes nf-nomad-s5cmd handles for INPUT staging.
      * A path matches when it startsWith() any entry. Defaults to empty
      * (plugin loads but matches nothing — useful for opt-in pipelines).
      */
     List<String> paths = []
 
     /**
-     * Ordered list of S3 URL prefixes nf-s5cmd handles for OUTPUT publishing
+     * Ordered list of S3 URL prefixes nf-nomad-s5cmd handles for OUTPUT publishing
      * via {@code publishDir}. Separate from {@link #paths} on purpose:
      * input staging and output publishing are independent decisions, and
      * intercepting publishDir means co-existing with Nextflow's nf-amazon
@@ -99,7 +99,7 @@ class S5cmdConfig {
     /**
      * Distributed-workdir config — when {@code workDir.enabled = true}, nf-nomad
      * routes task scratch through this s5cmd backend instead of relying on a
-     * shared filesystem. Discovered reflectively by nf-nomad; nf-s5cmd itself
+     * shared filesystem. Discovered reflectively by nf-nomad; nf-nomad-s5cmd itself
      * does not need to know about Nomad to populate this block.
      */
     S5cmdWorkDirConfig workDir = new S5cmdWorkDirConfig()
@@ -133,7 +133,7 @@ class S5cmdConfig {
 
         def unknown = map.keySet().findAll { !(KNOWN_KEYS.contains((String) it)) }
         if( unknown ) {
-            log.warn("nf-s5cmd: unknown top-level config key(s): ${unknown} — supported: ${KNOWN_KEYS.toList().sort()}")
+            log.warn("nf-nomad-s5cmd: unknown top-level config key(s): ${unknown} — supported: ${KNOWN_KEYS.toList().sort()}")
         }
         return cfg
     }
@@ -151,20 +151,20 @@ class S5cmdConfig {
             if( !p ) continue
             if( !p.startsWith('s3://') && !p.startsWith('s3a://') ) {
                 throw new IllegalArgumentException(
-                    "nf-s5cmd: paths entries must begin with s3:// or s3a://; got '${p}'")
+                    "nf-nomad-s5cmd: paths entries must begin with s3:// or s3a://; got '${p}'")
             }
         }
         for( String p : publishPaths ) {
             if( !p ) continue
             if( !p.startsWith('s3://') && !p.startsWith('s3a://') ) {
                 throw new IllegalArgumentException(
-                    "nf-s5cmd: publishPaths entries must begin with s3:// or s3a://; got '${p}'")
+                    "nf-nomad-s5cmd: publishPaths entries must begin with s3:// or s3a://; got '${p}'")
             }
         }
     }
 
     /**
-     * Returns true when the given path is a publishDir target nf-s5cmd
+     * Returns true when the given path is a publishDir target nf-nomad-s5cmd
      * should intercept (matches a configured {@link #publishPaths} prefix).
      * Distinct from {@link #matches} which governs input staging — output
      * publishing is opt-in via a separate prefix list.

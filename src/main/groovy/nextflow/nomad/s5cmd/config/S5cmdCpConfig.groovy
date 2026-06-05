@@ -28,7 +28,7 @@ import groovy.util.logging.Slf4j
  *   numWorkers        = 256    // -numworkers global pool
  *   retryCount        = 10     // -r
  *   partSize          = 50     // -p   in MiB; 0 = s5cmd default
- *   logLevel          = 'info' // --log (trace|debug|info|error; always lowercase)
+ *   logLevel          = 'error' // --log (trace|debug|info|error; always lowercase; default error = quiet staging)
  *   extraFlags        = ['--dry-run']
  * }}
  * </pre>
@@ -62,8 +62,14 @@ class S5cmdCpConfig {
      */
     int partSize = 0
 
-    /** Log level: trace|debug|info|warn|error. Maps to s5cmd --log. Default INFO. */
-    String logLevel = 'info'
+    /**
+     * Log level for the s5cmd staging commands: trace|debug|info|error.
+     * Maps to s5cmd {@code --log}. Defaults to {@code error} so per-file
+     * transfer chatter does not overshadow the task's own stdout/stderr on
+     * compute jobs (and Nextflow's process logs on the head). Raise to
+     * {@code info}/{@code debug} when diagnosing staging.
+     */
+    String logLevel = 'error'
 
     /**
      * Extra raw flags appended verbatim to every `s5cmd cp` invocation.
@@ -92,23 +98,23 @@ class S5cmdCpConfig {
 
         def unknown = map.keySet().findAll { !(KNOWN_KEYS.contains((String) it)) }
         if( unknown ) {
-            log.warn("nf-s5cmd: unknown cp{} key(s): ${unknown} — supported: ${KNOWN_KEYS.toList().sort()}")
+            log.warn("nf-nomad-s5cmd: unknown cp{} key(s): ${unknown} — supported: ${KNOWN_KEYS.toList().sort()}")
         }
         return cfg
     }
 
     void validate() {
         if( concurrency <= 0 ) {
-            throw new IllegalArgumentException("nf-s5cmd: cp.concurrency must be > 0, got ${concurrency}")
+            throw new IllegalArgumentException("nf-nomad-s5cmd: cp.concurrency must be > 0, got ${concurrency}")
         }
         if( numWorkers <= 0 ) {
-            throw new IllegalArgumentException("nf-s5cmd: cp.numWorkers must be > 0, got ${numWorkers}")
+            throw new IllegalArgumentException("nf-nomad-s5cmd: cp.numWorkers must be > 0, got ${numWorkers}")
         }
         if( retryCount < 0 ) {
-            throw new IllegalArgumentException("nf-s5cmd: cp.retryCount must be >= 0, got ${retryCount}")
+            throw new IllegalArgumentException("nf-nomad-s5cmd: cp.retryCount must be >= 0, got ${retryCount}")
         }
         if( partSize < 0 ) {
-            throw new IllegalArgumentException("nf-s5cmd: cp.partSize must be >= 0 (0 = s5cmd default), got ${partSize}")
+            throw new IllegalArgumentException("nf-nomad-s5cmd: cp.partSize must be >= 0 (0 = s5cmd default), got ${partSize}")
         }
     }
 }

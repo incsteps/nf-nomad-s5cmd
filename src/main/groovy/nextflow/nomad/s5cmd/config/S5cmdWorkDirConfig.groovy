@@ -80,11 +80,11 @@ class S5cmdWorkDirConfig {
         if( !enabled ) return
         if( !bucket ) {
             throw new IllegalArgumentException(
-                'nf-s5cmd: workDir.enabled=true requires workDir.bucket (e.g. s3://my-bucket)')
+                'nf-nomad-s5cmd: workDir.enabled=true requires workDir.bucket (e.g. s3://my-bucket)')
         }
         if( !(bucket.startsWith('s3://') || bucket.startsWith('s3a://')) ) {
             throw new IllegalArgumentException(
-                "nf-s5cmd: workDir.bucket must be an s3:// URL; got '${bucket}'")
+                "nf-nomad-s5cmd: workDir.bucket must be an s3:// URL; got '${bucket}'")
         }
     }
 

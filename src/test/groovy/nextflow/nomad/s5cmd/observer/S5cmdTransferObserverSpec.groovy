@@ -129,7 +129,9 @@ class S5cmdTransferObserverSpec extends Specification {
         observer.onFlowComplete()
 
         then:
-        messagesAtLevel(Level.INFO).any { it.contains('session complete') }
+        // session-complete is debug-level so it doesn't overshadow Nextflow's
+        // own stdout on the head job during normal runs
+        messagesAtLevel(Level.DEBUG).any { it.contains('session complete') }
     }
 
     def 'onFlowComplete is silent when no flow was created'() {

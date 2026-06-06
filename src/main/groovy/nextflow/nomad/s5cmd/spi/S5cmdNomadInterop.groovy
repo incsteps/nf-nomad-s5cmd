@@ -551,8 +551,23 @@ push_debug_then_exit() {
   log "EXIT trap fired with rc=\$rc"
   log "TASK_DIR contents:"
   ls -la . >> "\$NF_DBG" 2>&1 || true
-  ${s5cmdCall} cp ./ "\$\${NXF_S5CMD_REMOTE_WORKDIR}" >> "\$NF_DBG" 2>&1 \
-    || log "FINAL push-back to S3 FAILED"
+  # Two-phase push so the remote .exitcode is the LAST object written.
+  #
+  # The operator-side handler polls for the remote .exitcode and ONLY THEN
+  # pulls the task outputs. If we pushed everything in one shot, a node
+  # preemption (e.g. GCP spot reclaim) mid-push could land .exitcode before
+  # the actual outputs — the handler would then trust exit=0 and pull a task
+  # dir with missing output files. By pushing every other file first and
+  # .exitcode strictly last, an interrupted push leaves NO remote .exitcode,
+  # so synchronizeCompletion() returns null and the task is correctly retried.
+  ${s5cmdCall} cp --exclude ".exitcode" ./ "\$\${NXF_S5CMD_REMOTE_WORKDIR}" >> "\$NF_DBG" 2>&1 \
+    || log "push-back of outputs to S3 FAILED"
+  if [ -f .exitcode ]; then
+    ${s5cmdCall} cp .exitcode "\$\${NXF_S5CMD_REMOTE_WORKDIR}.exitcode" >> "\$NF_DBG" 2>&1 \
+      || log "FINAL .exitcode push to S3 FAILED"
+  else
+    log "no local .exitcode to push (task killed before completion) — leaving remote .exitcode absent so the task is retried"
+  fi
   exit \$rc
 }
 trap push_debug_then_exit EXIT

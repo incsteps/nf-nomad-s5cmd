@@ -294,9 +294,15 @@ class S5cmdNomadInteropSpec extends Specification {
         and: 'writes the local exit code marker'
         script.contains("printf '%s' \"\$_exit_code\" > .exitcode")
 
-        and: 'pushes the entire task dir back at the end'
-        script.contains('cp ./ "$${NXF_S5CMD_REMOTE_WORKDIR}"')
-        // The push-back line uses the same global flags
+        and: 'pushes the task dir back at the end in two phases — outputs first (excluding .exitcode), then .exitcode last'
+        // .exitcode strictly last guarantees its remote presence implies outputs
+        // were already staged, so a preemption mid-push triggers a retry rather
+        // than a trusted success with missing outputs.
+        script.contains('cp --exclude ".exitcode" ./ "$${NXF_S5CMD_REMOTE_WORKDIR}"')
+        script.contains('cp .exitcode "$${NXF_S5CMD_REMOTE_WORKDIR}.exitcode"')
+        // the outputs-first push must appear before the .exitcode push
+        script.indexOf('cp --exclude ".exitcode" ./') < script.indexOf('cp .exitcode "$${NXF_S5CMD_REMOTE_WORKDIR}.exitcode"')
+        // The push-back lines use the same global flags
         script.contains('s5cmd --endpoint-url http://rustfs:9900')
 
         and: 'falls back to .command.sh when .command.run is absent'

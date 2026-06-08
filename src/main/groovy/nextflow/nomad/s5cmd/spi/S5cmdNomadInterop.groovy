@@ -551,25 +551,30 @@ push_debug_then_exit() {
   log "EXIT trap fired with rc=\$rc"
   log "TASK_DIR contents:"
   ls -la . >> "\$NF_DBG" 2>&1 || true
-  # Two-phase push so the remote .exitcode is the LAST object written.
+  # Push outputs first with a plain recursive copy, then write + push .exitcode
+  # strictly LAST. Because the marker is written only AFTER the output push, a
+  # preemption mid-push leaves no remote .exitcode, so synchronizeCompletion()
+  # returns null and the task is correctly retried.
   #
-  # The operator-side handler polls for the remote .exitcode and ONLY THEN
-  # pulls the task outputs. If we pushed everything in one shot, a node
-  # preemption (e.g. GCP spot reclaim) mid-push could land .exitcode before
-  # the actual outputs — the handler would then trust exit=0 and pull a task
-  # dir with missing output files. By pushing every other file first and
-  # .exitcode strictly last, an interrupted push leaves NO remote .exitcode,
-  # so synchronizeCompletion() returns null and the task is correctly retried.
-  ${s5cmdCall} cp --exclude ".exitcode" ./ "\$\${NXF_S5CMD_REMOTE_WORKDIR}" >> "\$NF_DBG" 2>&1 \
+  # Do NOT add an s5cmd exclude-filter to this recursive push: with a
+  # non-wildcard directory source, an exclude-filter suppresses the recursive
+  # upload, so the task's outputs never reach S3 and downstream tasks 404 on
+  # stage-in (the 0.1.4 inter-task staging regression). Writing the marker after
+  # the recursive push needs no exclusion at all.
+  ${s5cmdCall} cp ./ "\$\${NXF_S5CMD_REMOTE_WORKDIR}" >> "\$NF_DBG" 2>&1 \
     || log "push-back of outputs to S3 FAILED"
-  if [ -f .exitcode ]; then
+  if [ -n "\$_exit_code" ]; then
+    printf '%s' "\$_exit_code" > .exitcode
     ${s5cmdCall} cp .exitcode "\$\${NXF_S5CMD_REMOTE_WORKDIR}.exitcode" >> "\$NF_DBG" 2>&1 \
       || log "FINAL .exitcode push to S3 FAILED"
   else
-    log "no local .exitcode to push (task killed before completion) — leaving remote .exitcode absent so the task is retried"
+    log "no task exit code captured (killed before completion) — leaving remote .exitcode absent so the task is retried"
   fi
   exit \$rc
 }
+# Initialised so the EXIT trap can test it safely under `set -u` even when the
+# task is killed before the exit code is captured below.
+_exit_code=""
 trap push_debug_then_exit EXIT
 
 log "bootstrap start; pwd=\$PWD; hostname=\$\${HOSTNAME:-?}"
@@ -637,8 +642,7 @@ bash "\$_task_script"
 _exit_code=\$?
 log "  task exited with \$_exit_code"
 
-printf '%s' "\$_exit_code" > .exitcode
-log "step 5: wrote .exitcode=\$_exit_code"
+log "step 5: task exit captured (\$_exit_code); .exitcode is written + pushed LAST by the trap"
 echo "[nf-task] end session=\$\${NF_SESSION_ID:--} head_job=\$\${NF_HEAD_JOB_ID:--} process=\$\${NF_PROCESS_NAME:--} task=\$\${NF_TASK_HASH:--} exit=\$_exit_code" >&2
 log "bootstrap done — trap will push back"
 exit "\$_exit_code"

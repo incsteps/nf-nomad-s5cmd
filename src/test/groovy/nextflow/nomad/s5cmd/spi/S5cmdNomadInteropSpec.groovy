@@ -294,14 +294,18 @@ class S5cmdNomadInteropSpec extends Specification {
         and: 'writes the local exit code marker'
         script.contains("printf '%s' \"\$_exit_code\" > .exitcode")
 
-        and: 'pushes the task dir back at the end in two phases — outputs first (excluding .exitcode), then .exitcode last'
-        // .exitcode strictly last guarantees its remote presence implies outputs
-        // were already staged, so a preemption mid-push triggers a retry rather
-        // than a trusted success with missing outputs.
-        script.contains('cp --exclude ".exitcode" ./ "$${NXF_S5CMD_REMOTE_WORKDIR}"')
+        and: 'pushes outputs first (plain recursive cp), then .exitcode strictly last'
+        // .exitcode is written + pushed only AFTER the recursive output push, so its
+        // remote presence implies the outputs were already staged; a preemption
+        // mid-push leaves no remote .exitcode and the task is retried.
+        // NB: a PLAIN `cp ./` is used deliberately — `s5cmd cp --exclude ".exitcode" ./`
+        // with a non-wildcard dir source suppresses the recursive upload, which is
+        // the 0.1.4 inter-task staging regression (downstream tasks 404 on stage-in).
+        script.contains('cp ./ "$${NXF_S5CMD_REMOTE_WORKDIR}"')
+        !script.contains('--exclude')   // regression guard: no exclude-filter on the recursive push
         script.contains('cp .exitcode "$${NXF_S5CMD_REMOTE_WORKDIR}.exitcode"')
         // the outputs-first push must appear before the .exitcode push
-        script.indexOf('cp --exclude ".exitcode" ./') < script.indexOf('cp .exitcode "$${NXF_S5CMD_REMOTE_WORKDIR}.exitcode"')
+        script.indexOf('cp ./ "$${NXF_S5CMD_REMOTE_WORKDIR}"') < script.indexOf('cp .exitcode "$${NXF_S5CMD_REMOTE_WORKDIR}.exitcode"')
         // The push-back lines use the same global flags
         script.contains('s5cmd --endpoint-url http://rustfs:9900')
 

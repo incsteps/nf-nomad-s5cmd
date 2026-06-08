@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.5
+
+### Fixed — inter-task input-staging regression (introduced in 0.1.4)
+- 0.1.4 pushed task outputs with `s5cmd cp --exclude ".exitcode" ./ <dest>` in the
+  worker bootstrap. With a **non-wildcard directory source**, an s5cmd
+  exclude-filter suppresses the recursive upload, so the task's outputs never
+  reached S3. Every downstream task that consumed an upstream output then failed
+  at stage-in with `404 NoSuchKey`, making any multi-step pipeline unrunnable.
+  (A/B-verified on `dylangrblr/Vinotype`: 0.1.4 → 19/19 BWAMEM2 stage-in 404s;
+  0.1.2 clean.)
+- **Fix:** push outputs with a plain recursive `s5cmd cp ./ <dest>` (no
+  exclude-filter — the proven pre-0.1.4 form), then write + push `.exitcode`
+  strictly **LAST**, *after* the output push. The "exitcode-last" preemption
+  safety added in 0.1.4 is preserved — a preemption mid-push leaves no remote
+  `.exitcode`, so `synchronizeCompletion()` returns null and the task is retried
+  — it just no longer depends on the broken exclude-filter. `_exit_code` is now
+  initialised early so the EXIT trap is safe under `set -u`.
+
 ## 0.1.4
 
 ### Reliability

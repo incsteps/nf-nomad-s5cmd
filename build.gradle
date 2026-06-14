@@ -41,7 +41,7 @@ repositories {
 }
 
 dependencies {
-    compileOnly 'io.nextflow:nf-nomad:0.4.0-edge6'
+    compileOnly 'io.nextflow:nf-nomad:0.5.0-edge1'
     testImplementation 'io.nextflow:nf-nomad:0.4.0-edge6'
 }
 
@@ -71,7 +71,7 @@ test {
 }
 
 nextflowPlugin {
-    nextflowVersion = '25.10.4'
+    nextflowVersion = '26.04.3'
     description = 'High-throughput S3 file staging for Nextflow on Nomad. Registers as a ' +
             'DistributedWorkdirProvider against nf-nomad\'s SPI extension point — currently a ' +
             'Nomad-only integration; requires nf-nomad to be loaded alongside it.'

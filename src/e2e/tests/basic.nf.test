@@ -3,6 +3,7 @@ nextflow_workflow {
     name "Test Basic"
     script "workflows/hello.nf"
     workflow "MAIN"
+    options ""
 
     test("Should run without failures") {
 

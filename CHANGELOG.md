@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.1.6
+
+### Fixed — silent partial-failure of s5cmd staging (rc=0 masking)
+s5cmd exits `rc=0` even when individual per-file copies fail (errors go only to
+stderr), so two real failures went undetected:
+- **Stage-in:** a failed per-task input copy (e.g. `IncompleteBody` on a large
+  reference-DB object) left the input missing, the task ran anyway, and a
+  downstream step 404'd. **Fix:** each stage-in `s5cmd cp` now captures stderr,
+  fails the task (non-zero exit) on `ERROR`/`IncompleteBody`, and verifies the
+  local target exists — aborting the chained stage-in on the first bad input.
+- **Push-back:** the EXIT-trap recursive `s5cmd cp ./ <remote>` could drop files
+  (e.g. `versions.yml`) while returning `rc=0`; the success `.exitcode` was still
+  written, so Nextflow proceeded and 404'd on the missing output. **Fix:** capture
+  the push output, detect `rc!=0`/`ERROR`/`IncompleteBody`, and override
+  `.exitcode` to non-zero so the task is marked failed and retried instead of
+  proceeding with incomplete outputs.
+
+Detection-only — the copy mechanism, endpoint, and retry behaviour are unchanged.
+Test-first: `S5cmdRcSafetySpec` (characterization + previously-`@PendingFeature`
+specs, now green). See `ISSUE-nf-nomad-s5cmd-large-object-staging`.
+
 ## 0.1.5
 
 ### Fixed — inter-task input-staging regression (introduced in 0.1.4)

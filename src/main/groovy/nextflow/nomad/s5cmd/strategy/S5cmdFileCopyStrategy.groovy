@@ -110,20 +110,63 @@ class S5cmdFileCopyStrategy implements ScriptFileCopyStrategy {
             // side (S5cmdNomadInterop.uploadInputFiles); mirror that here so
             // the worker pulls every file under the prefix into ./<stageName>/.
             String cmd
+            String localTarget
             if( source != null && java.nio.file.Files.isDirectory(source) ) {
                 String src = inputsBaseUrl() + stageName + '/'
                 String dst = './' + stageName + '/'
                 cmd = cmdBuilder.buildCopyDir(src, dst, false)
+                localTarget = './' + stageName
             }
             else {
                 String src = inputsBaseUrl() + stageName
                 String dst = './' + stageName
                 cmd = cmdBuilder.buildCopy(src, dst, false)
+                localTarget = './' + stageName
             }
-            sb.append(cmd)
-            sb.append('\n')
+            sb.append(guardStageIn(cmd, stageName, localTarget))
         }
         return sb.toString()
+    }
+
+    /**
+     * rc-safety: s5cmd exits {@code rc=0} even when individual files fail
+     * (per-file errors go to stderr only — e.g. {@code IncompleteBody} on a
+     * large object). Trusting rc lets a task run without its input and 404
+     * downstream. So we DON'T trust rc here: we capture the cp's stderr,
+     * fail the task if it contains {@code ERROR}/{@code IncompleteBody}, AND
+     * verify the expected local target actually materialised.
+     *
+     * <p>The emitted block aborts the chained stage-in on the FIRST failed
+     * input (it ends with {@code exit 1}), so {@code .command.run} never
+     * proceeds to run the user task with a missing input.</p>
+     *
+     * <p>Detection only — the copy mechanism, endpoint and retry behaviour
+     * are unchanged. See ISSUE-nf-nomad-s5cmd-large-object-staging.</p>
+     */
+    private static String guardStageIn(String cmd, String stageName, String localTarget) {
+        // Per-input stderr capture file (synchronous: write file, then read it —
+        // no process substitution, so the grep below can't race the writer).
+        String errVar = "_s5cmd_stagein_err"
+        StringBuilder b = new StringBuilder()
+        b.append('# nf-nomad-s5cmd: stage-in `').append(stageName).append('` (rc-safety: verify completeness, do not trust rc)\n')
+        b.append(errVar).append("=\"\$(mktemp)\"\n")
+        // Run the cp, capturing stderr to the file; then echo it back to the
+        // worker's real stderr so s5cmd's own messages still surface in logs.
+        b.append(cmd).append(' 2> "$').append(errVar).append('"\n')
+        b.append('cat "$').append(errVar).append('" >&2\n')
+        // 1) per-file error tokens on stderr → fail even though rc may be 0
+        b.append('if grep -Eq "ERROR|IncompleteBody" "$').append(errVar).append('"; then\n')
+        b.append('  echo "[nf-nomad-s5cmd] stage-in FAILED for \'').append(stageName).append('\' (s5cmd reported a per-file ERROR/IncompleteBody)" >&2\n')
+        b.append('  rm -f "$').append(errVar).append('"\n')
+        b.append('  exit 1\n')
+        b.append('fi\n')
+        b.append('rm -f "$').append(errVar).append('"\n')
+        // 2) the expected local target must exist (a silent drop yields no file)
+        b.append("if [ ! -e '").append(localTarget).append("' ]; then\n")
+        b.append('  echo "[nf-nomad-s5cmd] stage-in FAILED for \'').append(stageName).append('\' (expected local path \'').append(localTarget).append('\' is missing after cp)" >&2\n')
+        b.append('  exit 1\n')
+        b.append('fi\n')
+        return b.toString()
     }
 
     @Override

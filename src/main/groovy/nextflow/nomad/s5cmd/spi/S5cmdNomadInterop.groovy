@@ -561,8 +561,28 @@ push_debug_then_exit() {
   # upload, so the task's outputs never reach S3 and downstream tasks 404 on
   # stage-in (the 0.1.4 inter-task staging regression). Writing the marker after
   # the recursive push needs no exclusion at all.
-  ${s5cmdCall} cp ./ "\$\${NXF_S5CMD_REMOTE_WORKDIR}" >> "\$NF_DBG" 2>&1 \
-    || log "push-back of outputs to S3 FAILED"
+  #
+  # rc-safety: s5cmd exits rc=0 even when individual files fail to upload
+  # (per-file errors — e.g. IncompleteBody on a dropped versions.yml — go to
+  # stderr only). Trusting rc here would stamp the user task's SUCCESS code
+  # over an INCOMPLETE output set and Nextflow would 404 on the declared
+  # output. So we capture the push output, grep it for ERROR/IncompleteBody,
+  # and on ANY partial failure we override the recorded exit code to non-zero
+  # so Nextflow sees a FAILED task and retries — rather than silently
+  # proceeding with incomplete outputs. Detection only: the copy mechanism,
+  # endpoint and retries are unchanged (ISSUE-nf-nomad-s5cmd-large-object-staging).
+  _push_log="\$(mktemp)"
+  ${s5cmdCall} cp ./ "\$\${NXF_S5CMD_REMOTE_WORKDIR}" > "\$_push_log" 2>&1 ; _push_rc=\$?
+  cat "\$_push_log" >> "\$NF_DBG"
+  if [ "\$_push_rc" -ne 0 ] || grep -Eq "ERROR|IncompleteBody" "\$_push_log" ; then
+    log "push-back of outputs to S3 FAILED (rc=\$_push_rc or per-file ERROR/IncompleteBody on stderr) — marking task failed"
+    # Override any success code the user task reported: outputs are incomplete,
+    # so the task must be treated as failed (non-zero) and retried.
+    if [ -z "\$_exit_code" ] || [ "\$_exit_code" = "0" ]; then
+      _exit_code=1
+    fi
+  fi
+  rm -f "\$_push_log"
   if [ -n "\$_exit_code" ]; then
     printf '%s' "\$_exit_code" > .exitcode
     ${s5cmdCall} cp .exitcode "\$\${NXF_S5CMD_REMOTE_WORKDIR}.exitcode" >> "\$NF_DBG" 2>&1 \

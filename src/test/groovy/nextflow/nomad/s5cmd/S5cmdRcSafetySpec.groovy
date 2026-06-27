@@ -15,7 +15,6 @@ import nextflow.nomad.s5cmd.spi.S5cmdNomadInterop
 import nextflow.nomad.s5cmd.strategy.S5cmdCommandBuilder
 import nextflow.nomad.s5cmd.strategy.S5cmdFileCopyStrategy
 import nextflow.processor.TaskRun
-import spock.lang.PendingFeature
 import spock.lang.Specification
 import spock.lang.TempDir
 
@@ -43,24 +42,21 @@ import java.nio.file.Path
  *
  * <h2>Two kinds of test in this file</h2>
  * <ul>
- *   <li><b>CHARACTERIZATION</b> — GREEN now. Lock in the current shape of the
- *       emitted bash so the upcoming rc-safety fix can't silently regress the
- *       cp form, flags, quoting, or the EXIT-trap structure.</li>
- *   <li><b>DESIRED-BEHAVIOR</b> — RED now, marked {@link PendingFeature}.
- *       Assert that the emitted stage-in and push-back bash VERIFIES
- *       COMPLETENESS (captures s5cmd stderr and exits non-zero on
- *       {@code ERROR}/{@code IncompleteBody}, and/or verifies expected objects
- *       exist) rather than trusting rc. {@code @PendingFeature} keeps the build
- *       GREEN while unimplemented, and FAILS the build the moment the fix lands
- *       and the assertion unexpectedly passes — the TDD signal we want.</li>
+ *   <li><b>CHARACTERIZATION</b> — lock the stable shape of the emitted bash
+ *       (cp form, flags, quoting, one-cp-per-input, EXIT-trap wiring, no
+ *       {@code --exclude}) so future changes can't silently regress it.</li>
+ *   <li><b>DESIRED-BEHAVIOR</b> — assert the rc-safety contract now
+ *       implemented: stage-in and push-back VERIFY COMPLETENESS (capture
+ *       s5cmd output, fail on {@code ERROR}/{@code IncompleteBody}, verify the
+ *       expected object exists) rather than trusting rc. These were authored
+ *       test-first as {@code @PendingFeature} and flipped to plain features
+ *       once the detection fix landed.</li>
  * </ul>
  *
- * Tracking: ISSUE-nf-nomad-s5cmd-large-object-staging.
+ * <p>The fix is DETECTION ONLY — the copy mechanism, endpoint and retry
+ * behaviour are unchanged. Tracking: ISSUE-nf-nomad-s5cmd-large-object-staging.
  */
 class S5cmdRcSafetySpec extends Specification {
-
-    static final String PENDING_REASON =
-        'rc-safety fix pending — see ISSUE-nf-nomad-s5cmd-large-object-staging'
 
     @TempDir
     Path tempDir
@@ -137,7 +133,7 @@ class S5cmdRcSafetySpec extends Specification {
         cmd.contains("'s3://b/inputs/index/*' './index/'")
     }
 
-    def 'CHARACTERIZATION: getStageInputFilesScript chains one cp per input with no per-line rc check'() {
+    def 'CHARACTERIZATION: getStageInputFilesScript chains exactly one cp per input, preserving quoting + form'() {
         given:
         def s = strategy()
         def f1 = tempDir.resolve('reads.fq'); Files.writeString(f1, 'x')
@@ -154,13 +150,12 @@ class S5cmdRcSafetySpec extends Specification {
         script.contains("'s3://nextflow-work/sessions/abc/ab/cdef1234/inputs/index/*'")
         script.contains("'./index/'")
 
-        and: 'current behaviour trusts rc — none of the cp lines guard on stderr/ERROR'
-        // executable cp lines only — skip the leading `# ...stage-in (s5cmd cp...)` comment
+        and: 'still exactly one s5cmd cp per input (rc-safety guards wrap each cp, they do not duplicate it)'
+        // executable cp lines only — skip comments and the stderr-capture/grep guard lines.
         def cpLines = script.readLines().findAll {
-            it.contains(' cp ') && !it.trim().startsWith('#')
+            it.contains(' cp ') && it.contains('s5cmd') && !it.trim().startsWith('#')
         }
         cpLines.size() == 2
-        cpLines.every { !it.contains('||') && !it.contains('grep') }
     }
 
     // ── bootstrap push-back (EXIT trap) ───────────────────────────────────
@@ -189,10 +184,10 @@ class S5cmdRcSafetySpec extends Specification {
         outPush > 0
         exitPush > outPush
 
-        and: 'today the only failure signal is a log line via `|| log` — NOT a non-zero exit'
-        // The current push-back swallows partial failures: `|| log "...FAILED"`
-        // logs but does not propagate a non-zero rc out of the trap.
-        script.contains('|| log "push-back of outputs to S3 FAILED"')
+        and: 'rc-safety: the masking `|| log "...FAILED"` form is gone'
+        // The fix replaced the swallow-and-log push with a captured-output
+        // completeness check that overrides the exit code on partial failure.
+        !script.contains('|| log "push-back of outputs to S3 FAILED"')
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -200,7 +195,6 @@ class S5cmdRcSafetySpec extends Specification {
     // rc-safety fix makes the emitted bash verify completeness.
     // ══════════════════════════════════════════════════════════════════════
 
-    @PendingFeature(reason = PENDING_REASON)
     def 'DESIRED: stage-in captures s5cmd stderr and fails on a per-file ERROR / IncompleteBody'() {
         given:
         def s = strategy()
@@ -217,7 +211,6 @@ class S5cmdRcSafetySpec extends Specification {
         (script.contains('grep') || script.contains('exit 1') || script.contains('exit "'))
     }
 
-    @PendingFeature(reason = PENDING_REASON)
     def 'DESIRED: stage-in verifies each expected input object actually arrived locally'() {
         given:
         def s = strategy()
@@ -227,27 +220,29 @@ class S5cmdRcSafetySpec extends Specification {
         String script = s.getStageInputFilesScript(['reads.fq': f1])
 
         then: 'after the cp, the script asserts the staged file exists (so a silent drop fails the task)'
-        // e.g. `[ -s './reads.fq' ] || { echo ...; exit 1; }`  or  `test -e`
-        (script.contains("[ -s './reads.fq'") || script.contains("[ -e './reads.fq'")
-            || script.contains("test -s './reads.fq'") || script.contains("test -e './reads.fq'"))
+        // The emitted guard tests the local target with [ ... -e './reads.fq' ]
+        // (negated form: `if [ ! -e './reads.fq' ]; then ... exit 1`).
+        (script.contains("-e './reads.fq'") || script.contains("-s './reads.fq'")
+            || script.contains("test -e './reads.fq'") || script.contains("test -s './reads.fq'"))
+        // and the failure path aborts the chained stage-in
+        script.contains('exit 1')
     }
 
-    @PendingFeature(reason = PENDING_REASON)
     def 'DESIRED: push-back fails the task (non-zero) on a partial recursive-copy failure instead of only logging'() {
         when:
         String script = bootstrapScript()
 
-        then: 'a dropped file in the recursive push must surface as a non-zero rc out of the trap'
-        // The current `|| log "...FAILED"` must be replaced/augmented so that a
-        // partial failure sets a non-zero exit (the marker push must then be
-        // skipped, leaving no remote .exitcode → the task is retried).
-        !script.contains('|| log "push-back of outputs to S3 FAILED"') ||
-            (script.contains('IncompleteBody') || script.toLowerCase().contains('grep'))
-        // Completeness must be checked on the push: capture stderr and detect ERROR.
-        (script.contains('grep') && (script.contains('ERROR') || script.contains('IncompleteBody')))
+        then: 'the swallow-and-log masking is gone'
+        !script.contains('|| log "push-back of outputs to S3 FAILED"')
+
+        and: 'completeness is checked on the push: capture output + grep for ERROR/IncompleteBody'
+        script.contains('grep') && (script.contains('ERROR') || script.contains('IncompleteBody'))
+
+        and: 'a partial failure overrides a success code to non-zero so Nextflow retries'
+        // On detection, _exit_code is forced non-zero before .exitcode is written.
+        script.contains('_exit_code=1')
     }
 
-    @PendingFeature(reason = PENDING_REASON)
     def 'DESIRED: push-back does not silently swallow a missing declared output such as versions.yml'() {
         when:
         String script = bootstrapScript()

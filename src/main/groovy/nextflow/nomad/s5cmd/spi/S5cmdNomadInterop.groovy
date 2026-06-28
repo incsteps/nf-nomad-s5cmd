@@ -380,13 +380,22 @@ class S5cmdNomadInterop implements DistributedWorkdirProvider {
                 continue
             }
 
-            // Same-bucket S3 or local file: existing single-step path.
-            String src = isS3 ? toS3Uri(source) : source.toAbsolutePath().toString()
+            if( isS3 ) {
+                // Same-bucket S3 input: route via a local-disk round-trip
+                // (GET then PUT) instead of a direct server-side S3→S3 copy.
+                // See uploadSameBucketS3InputViaLocal for the IncompleteBody
+                // root cause this avoids.
+                uploadSameBucketS3InputViaLocal(source, toS3Uri(source), stageName, inputsBase)
+                continue
+            }
+
+            // Local (non-S3) input: existing single-step direct upload.
+            String src = source.toAbsolutePath().toString()
 
             // Directories need s5cmd's recursive form; single files the plain form.
             // The worker stage-in strategy mirrors this — see S5cmdFileCopyStrategy.
             String cmd
-            if( Files.isDirectory(source) ) {
+            if( isDirectoryInput(source) ) {
                 String dst = inputsBase + stageName + '/'
                 cmd = cmdBuilder.buildCopyDir(src, dst, true)
             }
@@ -396,6 +405,72 @@ class S5cmdNomadInterop implements DistributedWorkdirProvider {
             }
             runShell(prefixWithEnvExports(cmd))
         }
+    }
+
+    /**
+     * Stage a <b>same-bucket</b> S3 input (already on the cluster's MinIO,
+     * within {@code workDir.bucket}) into the task's {@code inputs/} dir via a
+     * local-disk round-trip — a GET (s3→local) followed by a PUT (local→s3) —
+     * instead of a direct server-side S3→S3 copy.
+     *
+     * <h3>Why not a direct S3→S3 copy?</h3>
+     * <p>The earlier same-bucket path issued {@code cmdBuilder.buildCopy/
+     * buildCopyDir(src=s3, dst=s3)}, which s5cmd executes as a server-side
+     * {@code CopyObject} on MinIO. For <b>large</b> objects (genome FASTAs,
+     * index tarballs) this MinIO rejects the request with
+     * {@code IncompleteBody} (HTTP 400). Plain GET (s3→local) and PUT
+     * (local→s3) are reliable; only the server-side COPY fails. Routing the
+     * same-bucket case through local disk — mirroring
+     * {@link #uploadExternalS3Input} — sidesteps the failing COPY entirely.
+     * (ISSUE-nf-nomad-s5cmd-large-object-staging.)</p>
+     *
+     * <p>Unlike the external path, the download uses the <b>configured cluster
+     * endpoint + credentials</b> (built via {@code cmdBuilder} so it carries
+     * {@code --endpoint-url}/flags, and wrapped in {@link #prefixWithEnvExports}
+     * so AWS creds are exported) — this is the cluster's own MinIO, NOT a
+     * public bucket, so there is no {@code --no-sign-request}.</p>
+     *
+     * <p><b>Known cost:</b> large reference DBs are downloaded in full to the
+     * head's temp dir before re-upload. The future efficiency fix is a
+     * host-volume for reference DBs (out of scope here); correctness first.</p>
+     */
+    protected void uploadSameBucketS3InputViaLocal(Path source, String srcUri, String stageName, String inputsBase) {
+        log.debug "[NOMAD] nf-nomad-s5cmd: same-bucket S3 input '${stageName}' (${srcUri}) — local round-trip (GET then PUT) to avoid server-side S3→S3 COPY"
+        boolean isDir = isDirectoryInput(source)
+
+        if( isDir ) {
+            // Directory: download the s3 prefix → local temp dir, then upload
+            // the local temp dir → inputs/<stageName>/.
+            Path tmpDir = Files.createTempDirectory('s5cmd-same-')
+            try {
+                String download = cmdBuilder.buildCopyDir(srcUri, tmpDir.toString(), false)
+                runShell(prefixWithEnvExports(download))
+                String upload = cmdBuilder.buildCopyDir(tmpDir.toString(), inputsBase + stageName + '/', true)
+                runShell(prefixWithEnvExports(upload))
+            } finally {
+                tmpDir.toFile().deleteDir()
+            }
+        } else {
+            // Single file: download s3 → temp, then upload temp → inputs/<stageName>.
+            Path tmp = Files.createTempFile('s5cmd-same-', '-' + stageName)
+            try {
+                String download = cmdBuilder.buildCopy(srcUri, tmp.toString(), false)
+                runShell(prefixWithEnvExports(download))
+                String upload = cmdBuilder.buildCopy(tmp.toString(), inputsBase + stageName, true)
+                runShell(prefixWithEnvExports(upload))
+            } finally {
+                Files.deleteIfExists(tmp)
+            }
+        }
+    }
+
+    /**
+     * Whether the given input path is a directory. Wraps
+     * {@link Files#isDirectory} so tests can deterministically simulate an S3
+     * directory input without a live S3 filesystem provider.
+     */
+    protected boolean isDirectoryInput(Path source) {
+        return Files.isDirectory(source)
     }
 
     /**

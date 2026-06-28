@@ -34,6 +34,10 @@ class S5cmdNomadInteropSpec extends Specification {
         final List<String> shellCalls = []
         Map<String, Integer> quietExitOverrides = [:]
         Closure<Void> onShell = null
+        // Source URIs (s3://… or local path strings) that should be reported as
+        // directories. Lets a faked S3 input behave as a dir without a live S3
+        // filesystem provider behind Files.isDirectory().
+        Set<String> dirSources = [] as Set
 
         StubInterop(TaskRun task, Map sessionConfig, Path sessionWorkDir) {
             super(task, sessionConfig, sessionWorkDir)
@@ -52,6 +56,29 @@ class S5cmdNomadInteropSpec extends Specification {
                 if( cmdline.contains(entry.key) ) return entry.value
             }
             return 0
+        }
+
+        @Override
+        protected boolean isDirectoryInput(java.nio.file.Path source) {
+            String key
+            try { key = source.toUri()?.toString() } catch (Exception ignored) { key = null }
+            if( key != null && dirSources.any { key.contains(it) } ) return true
+            try { return source.toString() in dirSources ? true : super.isDirectoryInput(source) }
+            catch (Exception ignored) { return false }
+        }
+    }
+
+    /**
+     * A faked S3 input Path. Only {@code toUri()} (→ s3://… scheme) is needed by
+     * the production routing; directory-ness is controlled separately via
+     * {@code StubInterop.dirSources}, since there is no live S3 filesystem here.
+     */
+    private Path s3Path(String s3Uri) {
+        // nf-amazon S3 paths stringify to /bucket/key and toUri() to s3://bucket/key.
+        URI uri = URI.create(s3Uri)
+        return Spy(Path) {
+            toUri() >> uri
+            toString() >> s3Uri.replaceFirst('^s3://', '/')
         }
     }
 
@@ -453,5 +480,113 @@ class S5cmdNomadInteropSpec extends Specification {
         expect:
         interop.synchronizeCompletion() == null
         interop.shellCalls == []
+    }
+
+    // ── input staging: same-bucket S3 inputs avoid server-side S3→S3 copy ──
+    //
+    // Regression guard for ISSUE-nf-nomad-s5cmd-large-object-staging: a direct
+    // server-side S3→S3 copy of a large same-bucket input fails on MinIO with
+    // IncompleteBody (HTTP 400). The fix routes same-bucket inputs through a
+    // local-disk round-trip (GET then PUT). The defining invariant: NO single
+    // emitted command may have BOTH an s3:// source AND an s3:// destination.
+
+    private TaskRun mockTaskWithInputs(Path workDir, Map<String, Path> inputs) {
+        Mock(TaskRun) {
+            getWorkDir() >> workDir
+            getInputFilesMap() >> inputs
+        }
+    }
+
+    /** Commands whose source AND destination are both s3:// (the forbidden direct copy). */
+    private static List<String> s3ToS3Copies(List<String> calls) {
+        calls.findAll { c ->
+            def m = (c =~ /cp\b.*'(s3:\/\/[^']+)'\s+'(s3:\/\/[^']+)'/)
+            m.find()
+        }
+    }
+
+    def 'same-bucket S3 directory input round-trips via local disk (GET then PUT), never a direct S3→S3 copy'() {
+        given:
+        Path sessionDir = tempDir.resolve('sess')
+        Path workDir = makeNfTask(sessionDir)
+        String srcUri = 's3://nextflow-work/refs/genome.idx'
+        def task = mockTaskWithInputs(workDir, ['genome': s3Path(srcUri)])
+        def interop = new StubInterop(task, enabledSession(), sessionDir)
+        interop.dirSources << srcUri
+
+        when:
+        interop.prepare()
+
+        then: 'no command has both an s3:// source AND an s3:// destination'
+        s3ToS3Copies(interop.shellCalls).isEmpty()
+
+        and: 'there is a download leg: from the source s3 prefix → a local temp dir'
+        def download = interop.shellCalls.find { it.contains("'${srcUri}/*'") && !it.contains('inputs/') }
+        download != null
+        // local destination (not an s3:// dst)
+        !(download =~ /'${java.util.regex.Pattern.quote(srcUri)}\/\*'\s+'s3:\/\//).find()
+
+        and: 'there is an upload leg: from the local temp dir → the per-task inputs/ dir'
+        def upload = interop.shellCalls.find {
+            it.contains("'s3://nextflow-work/sessions/abc/ab/cdef1234/inputs/genome/'") && it.contains('cp')
+        }
+        upload != null
+        // the upload SOURCE is local (no s3:// before the inputs/ destination)
+        !(upload =~ /'s3:\/\/[^']+'\s+'s3:\/\/nextflow-work\/sessions\/abc/).find()
+
+        and: 'download precedes upload'
+        interop.shellCalls.indexOf(download) < interop.shellCalls.indexOf(upload)
+    }
+
+    def 'same-bucket S3 file input round-trips via local disk (GET then PUT), never a direct S3→S3 copy'() {
+        given:
+        Path sessionDir = tempDir.resolve('sess')
+        Path workDir = makeNfTask(sessionDir)
+        String srcUri = 's3://nextflow-work/refs/sample.bam'
+        def task = mockTaskWithInputs(workDir, ['sample.bam': s3Path(srcUri)])
+        def interop = new StubInterop(task, enabledSession(), sessionDir)
+        // not added to dirSources → treated as a single file
+
+        when:
+        interop.prepare()
+
+        then: 'no direct S3→S3 copy'
+        s3ToS3Copies(interop.shellCalls).isEmpty()
+
+        and: 'download leg pulls the source object → a local temp file'
+        def download = interop.shellCalls.find { it.contains("'${srcUri}'") && !it.contains('inputs/') }
+        download != null
+
+        and: 'upload leg pushes the local temp file → inputs/<stageName>'
+        def upload = interop.shellCalls.find {
+            it.contains("'s3://nextflow-work/sessions/abc/ab/cdef1234/inputs/sample.bam'")
+        }
+        upload != null
+        !(upload =~ /'s3:\/\/[^']+'\s+'s3:\/\/nextflow-work\/sessions\/abc/).find()
+
+        and: 'download precedes upload'
+        interop.shellCalls.indexOf(download) < interop.shellCalls.indexOf(upload)
+    }
+
+    def 'local file input still uses a single direct upload (no round-trip)'() {
+        given:
+        Path sessionDir = tempDir.resolve('sess')
+        Path workDir = makeNfTask(sessionDir)
+        Path localInput = tempDir.resolve('reads.fq')
+        Files.writeString(localInput, 'data\n')
+        def task = mockTaskWithInputs(workDir, ['reads.fq': localInput])
+        def interop = new StubInterop(task, enabledSession(), sessionDir)
+
+        when:
+        interop.prepare()
+
+        then: 'exactly one input-staging command: a single PUT local→inputs/'
+        def inputCmds = interop.shellCalls.findAll { it.contains('inputs/reads.fq') }
+        inputCmds.size() == 1
+        inputCmds[0].contains(localInput.toAbsolutePath().toString())
+        inputCmds[0].contains("'s3://nextflow-work/sessions/abc/ab/cdef1234/inputs/reads.fq'")
+
+        and: 'no s3:// source appears for a purely local input'
+        s3ToS3Copies(interop.shellCalls).isEmpty()
     }
 }

@@ -452,7 +452,7 @@ class S5cmdNomadInterop implements DistributedWorkdirProvider {
             }
         } else {
             // Single file: download s3 → temp, then upload temp → inputs/<stageName>.
-            Path tmp = Files.createTempFile('s5cmd-same-', '-' + stageName)
+            Path tmp = Files.createTempFile('s5cmd-same-', tempSuffixFor(stageName))
             try {
                 String download = cmdBuilder.buildCopy(srcUri, tmp.toString(), false)
                 runShell(prefixWithEnvExports(download))
@@ -471,6 +471,23 @@ class S5cmdNomadInterop implements DistributedWorkdirProvider {
      */
     protected boolean isDirectoryInput(Path source) {
         return Files.isDirectory(source)
+    }
+
+    /**
+     * Build a {@link Files#createTempFile} suffix from a stage name that is
+     * always filesystem-legal — i.e. carries no path separator. A stage name
+     * may contain a subdirectory (e.g. FASTQC stages its reads under a nested
+     * name); passing that straight to {@code createTempFile} makes the
+     * generated name resolve to a non-simple path and Java throws
+     * "Invalid prefix or suffix". The temp file is a transient local buffer —
+     * its name has no bearing on the upload destination (computed from
+     * {@code inputsBase + stageName}) — so reducing the suffix to the leaf
+     * segment is purely a debugging nicety.
+     */
+    protected static String tempSuffixFor(String stageName) {
+        List<String> parts = (stageName ?: '').replace('\\', '/').tokenize('/')
+        String leaf = parts ? parts.last() : ''
+        return leaf ? '-' + leaf : '.tmp'
     }
 
     /**
@@ -519,7 +536,7 @@ class S5cmdNomadInterop implements DistributedWorkdirProvider {
             }
         } else {
             // Single file: download to temp, upload to MinIO.
-            Path tmp = Files.createTempFile('s5cmd-ext-', '-' + stageName)
+            Path tmp = Files.createTempFile('s5cmd-ext-', tempSuffixFor(stageName))
             try {
                 String download = "${bin} --no-verify-ssl --no-sign-request cp '${srcUri}' '${tmp}'"
                 int rc = runShellQuiet(download)

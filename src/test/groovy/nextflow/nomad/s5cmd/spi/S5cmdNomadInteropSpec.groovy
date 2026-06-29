@@ -568,6 +568,51 @@ class S5cmdNomadInteropSpec extends Specification {
         interop.shellCalls.indexOf(download) < interop.shellCalls.indexOf(upload)
     }
 
+    def 'same-bucket S3 file with a nested stage name does not throw "Invalid prefix or suffix" (FASTQC regression)'() {
+        given:
+        Path sessionDir = tempDir.resolve('sess')
+        Path workDir = makeNfTask(sessionDir)
+        String srcUri = 's3://nextflow-work/refs/SAMPLE_1.fastq.gz'
+        // Nested stage name (carries a '/') — e.g. FASTQC stages its reads under a
+        // subdirectory. The separator must NOT leak into the createTempFile suffix,
+        // or Java throws java.lang.IllegalArgumentException: Invalid prefix or suffix.
+        def task = mockTaskWithInputs(workDir, ['fastqc/SAMPLE_1.fastq.gz': s3Path(srcUri)])
+        def interop = new StubInterop(task, enabledSession(), sessionDir)
+
+        when:
+        interop.prepare()
+
+        then: 'temp-file creation no longer throws, and no direct S3→S3 copy is emitted'
+        noExceptionThrown()
+        s3ToS3Copies(interop.shellCalls).isEmpty()
+
+        and: 'download leg pulls the source object → a local temp file'
+        def download = interop.shellCalls.find { it.contains("'${srcUri}'") && !it.contains('inputs/') }
+        download != null
+
+        and: 'upload leg pushes the local temp file → inputs/<nested stageName>'
+        def upload = interop.shellCalls.find {
+            it.contains("'s3://nextflow-work/sessions/abc/ab/cdef1234/inputs/fastqc/SAMPLE_1.fastq.gz'")
+        }
+        upload != null
+
+        and: 'download precedes upload'
+        interop.shellCalls.indexOf(download) < interop.shellCalls.indexOf(upload)
+    }
+
+    def 'tempSuffixFor strips path separators so createTempFile never sees a nested name'() {
+        expect:
+        S5cmdNomadInterop.tempSuffixFor(input) == expected
+
+        where:
+        input                      | expected
+        'sample.bam'               | '-sample.bam'
+        'fastqc/SAMPLE_1.fastq.gz' | '-SAMPLE_1.fastq.gz'
+        'a/b/c/read.fq.gz'         | '-read.fq.gz'
+        ''                         | '.tmp'
+        null                       | '.tmp'
+    }
+
     def 'local file input still uses a single direct upload (no round-trip)'() {
         given:
         Path sessionDir = tempDir.resolve('sess')

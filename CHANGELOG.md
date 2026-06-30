@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.1.7
+
+### Fixed — large same-bucket S3 inputs failed staging with `IncompleteBody`
+Staging a large `path` input that lives in the **same MinIO bucket** as the work
+dir used a server-side S3→S3 copy (`s5cmd cp s3://… s3://…`), which the cluster's
+MinIO rejects for large objects (`IncompleteBody`, HTTP 400) — e.g. a 2.3 GB
+CheckV reference DB. **Fix:** same-bucket S3 inputs now route through a local-disk
+round-trip (download with the configured endpoint → re-upload to `inputs/`), the
+same pattern external-bucket inputs already use. This converts the flaky
+server-side COPY into a reliable GET + PUT and sidesteps the failure entirely.
+External-bucket inputs are unchanged; purely local inputs still use a single
+direct upload. **Known cost:** large reference DBs are downloaded to the head's
+temp dir before re-upload (a host-volume for reference DBs is the future
+efficiency fix).
+
+### Fixed — `Invalid prefix or suffix` at task setup for nested stage names
+The local round-trip derived the temp-file suffix directly from the stage name.
+When a stage name carries a subdirectory (e.g. FASTQC stages its reads under a
+nested name), the `/` leaked into the `Files.createTempFile` suffix and Java threw
+`Invalid prefix or suffix`. **Fix:** the temp-file suffix is reduced to a
+path-separator-free leaf (`tempSuffixFor`); the temp file is a transient local
+buffer, so its name has no bearing on the upload destination. Applied to both the
+same-bucket and external-input paths.
+
 ## 0.1.6
 
 ### Fixed — silent partial-failure of s5cmd staging (rc=0 masking)

@@ -252,6 +252,39 @@ After either run:
 | `nomad.s5cmd.workDir.bucket` | — | `s3://<bucket>` root for session work-dirs |
 | `nomad.s5cmd.workDir.prefix` | — | Optional path prefix under the bucket |
 | `nomad.s5cmd.workDir.completionTimeout` | `60s` | Max wait for remote `.exitcode` |
+| `nomad.s5cmd.workDir.cleanupLocal` | `true` | After each task, delete the staged **input** copies from node-local scratch — see [Reclaiming space](#reclaiming-space-node-local-and-s3) |
+| `nomad.s5cmd.workDir.cleanupRemoteInputs` | `true` | At end of run, sweep the per-task `inputs/` prefixes from the S3 work dir |
+
+## Reclaiming space: node-local and S3
+
+In distributed-workdir mode every task's inputs are written twice — once to the
+per-task `inputs/` prefix on S3 by the head, and once to node-local scratch by the
+worker staging them in. Neither copy is needed after the task exits, and on a long
+run with large reference data both accumulate faster than anything reclaims them.
+Two cleanup steps run by default.
+
+**After each task, on the worker (`workDir.cleanupLocal`, default `true`).** Once the
+task's command completes and before outputs are pushed back to S3, the staged input
+copies are deleted from node-local scratch. This reclaims worker disk immediately
+rather than at end of run, and it keeps inputs out of the worker→S3 push-back, which
+would otherwise re-upload bytes the head had already placed under `inputs/`.
+
+Two things are deliberately never removed: **declared outputs**, and the files
+`-resume` relies on. An input that is *also* a declared output — an in-place
+modification staged and published under the same name — is detected and kept, so the
+cleanup cannot delete a result.
+
+**At end of run, against S3 (`workDir.cleanupRemoteInputs`, default `true`).** When
+the session completes, the per-task `inputs/` prefixes are swept from the S3 work dir
+(`s3://<bucket>/<prefix>/*/inputs/*`). Those staged inputs are needed only *during*
+the run — for worker stage-in and for retries — and `-resume` reuses task **outputs**,
+never inputs, so removing them does not compromise a later resumed run.
+
+The sweep is **best-effort and never fails the run**: a non-zero return (for example
+when there is nothing to remove) is logged as a warning and execution continues.
+
+Set either key to `false` to retain the copies — useful when debugging a staging
+problem, where the inputs a task actually received are the evidence you want.
 
 ## Requirements
 

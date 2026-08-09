@@ -91,3 +91,34 @@ specs, now green). See `ISSUE-nf-nomad-s5cmd-large-object-staging`.
   - Changed the default `cp.logLevel` for s5cmd staging commands from `info` to
     `error`, so s5cmd no longer prints a line per transferred file into task
     output. Raise to `info`/`debug` via `nomad.s5cmd.cp.logLevel` when debugging.
+
+## 0.1.2
+
+_Documented retroactively: both behaviours shipped in 0.1.2 (2026-06-04, commits
+`86c4eb0` and `a3574a2`) but were never written up here or in the configuration
+reference. Recorded now so operators can find them — and switch them off._
+
+### Added — node-local input cleanup after each task (`workDir.cleanupLocal`, default `true`)
+In distributed-workdir mode a task's inputs exist twice: on S3 under the per-task
+`inputs/` prefix, and on node-local scratch once the worker stages them in. The
+local copies are now deleted as soon as the task's command completes, before
+outputs are pushed back. This reclaims worker disk immediately instead of at end
+of run, and keeps inputs out of the worker→S3 push-back, which would otherwise
+re-upload bytes the head had already placed under `inputs/`.
+
+Declared **outputs** and anything `-resume` depends on are never touched. An input
+that is also a declared output — an in-place modification staged and published
+under the same name — is detected and kept, so the cleanup cannot delete a result.
+
+### Added — end-of-run sweep of S3 staged inputs (`workDir.cleanupRemoteInputs`, default `true`)
+On session completion the per-task `inputs/` prefixes are removed from the S3 work
+dir (`s3://<bucket>/<prefix>/*/inputs/*`). Staged inputs are needed only during the
+run — worker stage-in and retries — and `-resume` reuses task **outputs**, never
+inputs, so the sweep does not compromise a resumed run.
+
+Best-effort by design: a non-zero return (for example when there is nothing to
+remove) is logged as a warning and the run continues. It never fails a workflow.
+
+Set either key to `false` to keep the copies, which is what you want when debugging
+a staging problem — the inputs a task actually received are the evidence.
+

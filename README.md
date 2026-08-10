@@ -154,6 +154,78 @@ nomad {
 The minimum triple to activate the SPI: `nomad.s5cmd.enabled = true` +
 `nomad.s5cmd.workDir.enabled = true` + `nomad.s5cmd.workDir.bucket` set.
 
+### Four requirements, and how each fails when missed
+
+Every one of these has a quiet failure mode: the run starts, tasks execute, and the
+problem only surfaces later as a missing output or a credential error. They are listed
+with the symptom first so a failing run can be matched to its cause.
+
+**1. Load the plugin.** `nf-nomad-s5cmd` must appear in the `plugins` block alongside
+`nf-nomad`. Declaring `nomad.s5cmd { … }` alone does nothing.
+
+```nextflow
+plugins {
+    id 'nf-nomad@<version>'
+    id 'nf-nomad-s5cmd@<version>'
+}
+```
+
+> *Symptom if missed:* tasks run and complete, but nothing returns. Each task's remote
+> directory holds only `.command.run` and `.command.sh` — the files the head wrote — and
+> no `.exitcode`, `.command.out` or outputs. Nextflow then reports
+> `Missing output file(s) … expected by process`. Nothing is wrong with the pipeline: with
+> the plugin absent there is no data-movement mechanism at all, so an `s3://` work dir is
+> written to by the head and never read back from the workers.
+
+**2. Set the activation triple** (above). `binary` on its own does not activate the SPI.
+
+> *Symptom if missed:* identical to (1) — the provider never registers.
+
+**3. `nomad.s5cmd.s3` is required; it is NOT inherited from Nextflow's `aws` scope.**
+The `s5cmd` binary is a **subprocess with its own S3 client**. It does not read
+`aws { client { endpoint … } }`. Without an explicit endpoint it talks to **real AWS**.
+
+```nextflow
+nomad.s5cmd.s3 {
+    endpoint        = 'http://<your-minio>:9000'
+    region          = 'us-east-1'
+    accessKeyId     = System.getenv('AWS_ACCESS_KEY_ID')
+    secretAccessKey = System.getenv('AWS_SECRET_ACCESS_KEY')
+    usePathStyle    = true      // required for MinIO / rustfs
+}
+```
+
+> *Symptom if missed:* `InvalidAccessKeyId: The AWS Access Key Id you provided does not
+> exist in our records. status code: 403`, carrying a genuine AWS request id. The
+> credentials are not wrong — they are being presented to the wrong service, because the
+> endpoint defaulted to AWS.
+
+**4. `binary` must resolve at the same path in the head AND in task containers.**
+It is a single setting used by both. The head runs the end-of-run input sweep; the tasks
+run stage-in and push-back. If the volume carrying `s5cmd` is mounted at different
+destinations on each side, one of them cannot find it.
+
+Mount the same volume at the task-side path in the head as well:
+
+```hcl
+# head task
+volume_mount { volume = "work"  destination = "/work"      }
+volume_mount { volume = "work"  destination = "/nxf-work"  }   # matches the task-side path
+```
+
+> *Symptom if missed:* `nf-nomad-s5cmd: input sweep rc=127 (non-fatal …): bash: line 2:
+> /nxf-work/bin/s5cmd: No such file or directory`. It is logged as non-fatal and is easy to
+> scroll past, but it means the head half of the data path is not working.
+
+### Confirming the configuration took effect
+
+Two checks, in order of cost:
+
+- The startup banner reports the resolved endpoint:
+  `nf-nomad-s5cmd: active; endpoint=… pathStyle=…`. Absent banner means (1) or (2).
+- After a task completes, list its remote directory. A working configuration leaves
+  `.exitcode` and `.command.out` there, not just `.command.run` and `.command.sh`.
+
 ### Legacy top-level scope
 
 A bare top-level `s5cmd { … }` block is still accepted with a one-shot

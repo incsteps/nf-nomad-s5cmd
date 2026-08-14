@@ -793,7 +793,15 @@ exit "\$_exit_code"
     protected void copyAllArtifacts() {
         // toS3Uri() — same normalisation as uploadCommandFiles(); see that method for rationale.
         String cmd = cmdBuilder.buildCopyDir(remoteTaskDir(), toS3Uri(task.workDir), false)
-        runShell(prefixWithEnvExports(cmd))
+        // rc-safety (see runShellVerified): this is the THIRD unverified copy, after
+        // stage-in and push-back. It reconciles the worker's remote task dir into the
+        // location Nextflow will look in. A per-file failure here returns rc=0, so the
+        // task is finalised with the worker's exit code — 0 — over an INCOMPLETE
+        // artifact set, and Nextflow then reports
+        //     Missing output file(s) `<pattern>` expected by process `<X>`
+        // against a task whose own exit status is 0. Verifying here converts that into
+        // an honest failure that the surrounding handler turns into a retryable error.
+        runShellVerified(prefixWithEnvExports(cmd))
     }
 
     protected void writeLocalExitCode(Integer code) {
@@ -824,6 +832,50 @@ exit "\$_exit_code"
         if( proc.exitValue() != 0 ) {
             throw new ProcessSubmitException(
                 "[NOMAD] nf-nomad-s5cmd command failed (rc=${proc.exitValue()}): ${cmdline}\n${err}")
+        }
+    }
+
+    /**
+     * Pattern for a per-file s5cmd failure reported while the process still exits
+     * {@code rc=0}. Deliberately the same contract the worker-side bash uses
+     * ({@code grep -Eq "ERROR|IncompleteBody"}) so all three copy sites — stage-in,
+     * push-back and the operator-side artifact pull — agree on what "partial
+     * failure" means.
+     */
+    static boolean reportsPerFileFailure(String output) {
+        if( !output ) return false
+        return output.contains('ERROR') || output.contains('IncompleteBody')
+    }
+
+    /**
+     * Like {@link #runShell}, but ALSO fails when s5cmd reports a per-file error
+     * while still exiting {@code rc=0}.
+     *
+     * <p>s5cmd returns 0 on a PARTIAL copy: individual object failures (e.g.
+     * {@code IncompleteBody}) are written to stderr only. {@link #runShell} captures
+     * stderr but discards it unless rc is non-zero, so a partial copy is
+     * indistinguishable from a complete one. The worker side already guards against
+     * this on stage-in and push-back; this is the operator-side equivalent.</p>
+     *
+     * <p>Detection only — the copy mechanism, endpoint and retry behaviour are
+     * unchanged. Tracking: ISSUE-nf-nomad-s5cmd-large-object-staging.</p>
+     */
+    protected void runShellVerified(String cmdline) {
+        Process proc = ['bash', '-c', cmdline].execute()
+        StringBuffer out = new StringBuffer()
+        StringBuffer err = new StringBuffer()
+        proc.consumeProcessOutput(out, err)
+        proc.waitFor()
+        if( proc.exitValue() != 0 ) {
+            throw new ProcessSubmitException(
+                "[NOMAD] nf-nomad-s5cmd command failed (rc=${proc.exitValue()}): ${cmdline}\n${err}")
+        }
+        String combined = out.toString() + '\n' + err.toString()
+        if( reportsPerFileFailure(combined) ) {
+            throw new ProcessSubmitException(
+                "[NOMAD] nf-nomad-s5cmd reported a per-file ERROR/IncompleteBody while exiting rc=0 — " +
+                "the artifact set is INCOMPLETE, so the task is failed rather than finalised with a " +
+                "success code over missing outputs: ${cmdline}\n${combined}")
         }
     }
 

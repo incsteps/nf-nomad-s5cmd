@@ -49,6 +49,16 @@ class S5cmdNomadInteropSpec extends Specification {
             if( onShell ) onShell.call(cmdline)
         }
 
+        // The artifact pull goes through the verifying variant (it must detect a
+        // per-file failure reported with rc=0). Recorded identically so the
+        // existing shellCalls assertions still describe what was executed;
+        // verification behaviour itself is covered in S5cmdRcSafetySpec.
+        @Override
+        protected void runShellVerified(String cmdline) {
+            shellCalls << cmdline
+            if( onShell ) onShell.call(cmdline)
+        }
+
         @Override
         protected int runShellQuiet(String cmdline) {
             shellCalls << cmdline

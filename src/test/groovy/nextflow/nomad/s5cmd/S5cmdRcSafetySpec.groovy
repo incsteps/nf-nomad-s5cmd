@@ -15,6 +15,7 @@ import nextflow.nomad.s5cmd.spi.S5cmdNomadInterop
 import nextflow.nomad.s5cmd.strategy.S5cmdCommandBuilder
 import nextflow.nomad.s5cmd.strategy.S5cmdFileCopyStrategy
 import nextflow.processor.TaskRun
+import nextflow.exception.ProcessSubmitException
 import spock.lang.Specification
 import spock.lang.TempDir
 
@@ -255,5 +256,62 @@ class S5cmdRcSafetySpec extends Specification {
         (script.contains('2>') &&
             (script.contains('ERROR') || script.contains('IncompleteBody')) &&
             script.contains('grep'))
+    }
+    // ══════════════════════════════════════════════════════════════════════
+    // ARTIFACT PULL — the third unverified copy, and the one that produces the
+    // "Missing output file(s) ... expected by process X" signature while the
+    // task's own exit status is 0. Stage-in and push-back run on the worker;
+    // this one runs operator-side in synchronizeCompletion(), reconciling the
+    // remote task dir into the location Nextflow will look in. It went through
+    // runShell(), which captures stderr but discards it whenever rc == 0.
+    // Source: brainstorms/nf-nomad/2026-08-14-e2-mode-equivalence-and-the-missing-output-signature.md
+    // ══════════════════════════════════════════════════════════════════════
+
+    def 'DESIRED: a per-file failure reported with rc=0 counts as a partial copy'() {
+        expect:
+        S5cmdNomadInterop.reportsPerFileFailure(text) == expected
+
+        where:
+        text                                                              || expected
+        'cp s3://b/x ./x'                                                 || false
+        ''                                                                || false
+        null                                                              || false
+        'ERROR "cp s3://b/versions.yml": IncompleteBody'                  || true
+        'IncompleteBody: You did not provide the number of bytes'         || true
+    }
+
+    def 'DESIRED: the artifact pull fails when s5cmd reports a per-file error but exits rc=0'() {
+        given: 'an interop whose artifact pull emits an s5cmd-style per-file error on stderr, rc=0'
+        def interop = interopAndPrepare()
+        def captured = null
+        interop.metaClass.prefixWithEnvExports = { String c -> c }
+        interop.metaClass.runShellVerified = { String c ->
+            captured = c
+            // Mirrors real s5cmd: per-file error on stderr, process still exits 0.
+            String simulated = 'ERROR "cp s3://b/ab/cdef1234/versions.yml": IncompleteBody'
+            if( S5cmdNomadInterop.reportsPerFileFailure(simulated) )
+                throw new ProcessSubmitException("[NOMAD] incomplete artifact set: ${c}")
+        }
+
+        when:
+        interop.copyAllArtifacts()
+
+        then: 'the incomplete pull is surfaced rather than finalised over missing outputs'
+        def e = thrown(ProcessSubmitException)
+        e.message.contains('incomplete artifact set')
+
+        and: 'it really was the artifact-pull command that was verified'
+        captured?.contains('cp ')
+    }
+
+    def 'DESIRED: the artifact pull no longer goes through the rc-only runShell'() {
+        when:
+        String src = new File('src/main/groovy/nextflow/nomad/s5cmd/spi/S5cmdNomadInterop.groovy').text
+        String body = src.substring(src.indexOf('protected void copyAllArtifacts()'))
+        body = body.substring(0, body.indexOf('protected void writeLocalExitCode'))
+
+        then: 'copyAllArtifacts uses the verifying helper, not the rc-only one'
+        body.contains('runShellVerified(')
+        !(body =~ /(?<!Verified)\brunShell\(/)
     }
 }

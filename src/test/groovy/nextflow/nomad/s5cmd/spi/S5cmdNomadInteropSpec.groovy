@@ -82,6 +82,64 @@ class S5cmdNomadInteropSpec extends Specification {
         }
     }
 
+    def 'resolveBinDirs reads getBinDirs from the TaskProcessor, not the Session'() {
+        // getBinDirs() -> List<Path> is defined on TaskProcessor. Session has
+        // only the singular getBinDir(). Calling the plural on Session throws
+        // on every task and silently degrades to the project bin dir alone,
+        // so module bin dirs never get staged.
+        given:
+        Path projectBin = tempDir.resolve('project/bin')
+        Path moduleBin = tempDir.resolve('modules/foo/resources/usr/bin')
+        Files.createDirectories(projectBin)
+        Files.createDirectories(moduleBin)
+
+        def session = Mock(nextflow.Session) {
+            // Present, and deliberately different, so a fallback to the
+            // singular is visible in the assertion below.
+            getBinDir() >> projectBin
+        }
+        def processor = Mock(nextflow.processor.TaskProcessor) {
+            getSession() >> session
+            getBinDirs() >> [projectBin, moduleBin]
+        }
+        def task = Mock(TaskRun) {
+            getWorkDir() >> tempDir.resolve('ab/cdef1234')
+            getProcessor() >> processor
+        }
+        def interop = new S5cmdNomadInterop(task, enabledSession(), tempDir)
+
+        when:
+        def dirs = interop.resolveBinDirs()
+
+        then:
+        dirs == [projectBin, moduleBin]
+    }
+
+    def 'resolveBinDirs falls back to the project bin dir when getBinDirs is unavailable'() {
+        given:
+        Path projectBin = tempDir.resolve('project2/bin')
+        Files.createDirectories(projectBin)
+
+        def session = Mock(nextflow.Session) {
+            getBinDir() >> projectBin
+        }
+        def processor = Mock(nextflow.processor.TaskProcessor) {
+            getSession() >> session
+            getBinDirs() >> { throw new MissingMethodException('getBinDirs', Object, [] as Object[]) }
+        }
+        def task = Mock(TaskRun) {
+            getWorkDir() >> tempDir.resolve('ab/cdef1234')
+            getProcessor() >> processor
+        }
+        def interop = new S5cmdNomadInterop(task, enabledSession(), tempDir)
+
+        when:
+        def dirs = interop.resolveBinDirs()
+
+        then:
+        dirs == [projectBin]
+    }
+
     private TaskRun mockTaskAt(Path workDir) {
         Mock(TaskRun) { getWorkDir() >> workDir }
     }

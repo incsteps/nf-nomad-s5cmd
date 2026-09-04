@@ -297,16 +297,25 @@ class S5cmdNomadInterop implements DistributedWorkdirProvider {
             return out
         }
         if( sess == null ) return out
-        // Modern API: getBinDirs() → List<Path>
+        // getBinDirs() -> List<Path> lives on TaskProcessor, not on Session.
+        // It returns the project bin dir plus any module bin dirs, which is
+        // what Nextflow itself stages (see TaskBean: task.processor.getBinDirs()).
+        //
+        // This was previously called on Session, where the plural has never
+        // existed in any Nextflow release, so it threw on every task and the
+        // singular fallback below did all the work. That fallback returns the
+        // project bin dir only, so module bin dirs were never staged.
         try {
-            Object multi = sess.getBinDirs()
+            Object multi = task.processor?.getBinDirs()
             if( multi instanceof List ) {
                 for( Object p : (List) multi ) if( p instanceof Path ) out.add((Path) p)
             }
         } catch (Throwable t) {
-            log.debug "[NOMAD] nf-nomad-s5cmd: session.getBinDirs() failed — ${t.message}"
+            log.warn "[NOMAD] nf-nomad-s5cmd: taskProcessor.getBinDirs() failed — ${t.message}; " +
+                    "falling back to the project bin dir only, so module bin dirs will not be staged"
         }
-        // Older API: getBinDir() → Path
+        // Fallback for Nextflow versions without TaskProcessor.getBinDirs():
+        // session.getBinDir() -> Path, the project bin dir.
         if( out.isEmpty() ) {
             try {
                 Object single = sess.getBinDir()

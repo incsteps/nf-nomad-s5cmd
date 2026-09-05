@@ -583,6 +583,12 @@ class S5cmdNomadInterop implements DistributedWorkdirProvider {
         Map<String, String> env = new LinkedHashMap<>()
         env.put('NXF_S5CMD_REMOTE_WORKDIR', remoteTaskDir())
         env.put('NXF_S5CMD_REMOTE_EXITCODE', remoteExitFile())
+        // Per-task reclamation of the remote inputs/ dir, done by the task's own
+        // EXIT trap. Scoped to THIS task's prefix — the end-of-run wildcard sweep
+        // it replaces spanned every run sharing the bucket+prefix and could delete
+        // a concurrently-running pipeline's staged inputs.
+        env.put('NXF_S5CMD_CLEANUP_INPUTS',
+                (workDir?.enabled && workDir?.cleanupRemoteInputs) ? '1' : '0')
         // Session-level bin/ root, e.g. s3://bucket/prefix/_nxf-bin/<sessionId>/
         // The worker bootstrap pulls .nxf-bin/* from here (instead of per-task)
         // so a pipeline with N tasks ships bin/ once, not N times.
@@ -684,6 +690,23 @@ push_debug_then_exit() {
     fi
   fi
   rm -f "\$_push_log"
+
+  # Reclaim THIS task's remote inputs/ dir, now that its outputs are pushed.
+  # Scoped to \$NXF_S5CMD_REMOTE_WORKDIR — never a bucket-wide wildcard, which
+  # would also match the task dirs of any other run sharing this prefix.
+  # Best-effort: a failure here must never change the task's exit code.
+  # Only on success. A failed task's staged inputs ARE the evidence for why it
+  # failed — "the file the guard said was missing" is the first thing anyone looks
+  # for — so a failure keeps them and pays a little S3 space for a diagnosable run.
+  if [ "\$\${NXF_S5CMD_CLEANUP_INPUTS:-0}" = "1" ] && [ -n "\$\${NXF_S5CMD_REMOTE_WORKDIR:-}" ] \
+     && [ "\$\${_exit_code:-1}" = "0" ]; then
+    log "reclaiming remote inputs/ for this task only"
+    ${s5cmdCall} rm "\$\${NXF_S5CMD_REMOTE_WORKDIR}inputs/*" >> "\$NF_DBG" 2>&1 \
+      || log "  remote inputs/ reclaim failed (non-fatal; often just nothing to remove)"
+  elif [ "\$\${NXF_S5CMD_CLEANUP_INPUTS:-0}" = "1" ]; then
+    log "task did not succeed (exit=\$\${_exit_code:-<none>}) — KEEPING remote inputs/ for diagnosis"
+  fi
+
   if [ -n "\$_exit_code" ]; then
     printf '%s' "\$_exit_code" > .exitcode
     ${s5cmdCall} cp .exitcode "\$\${NXF_S5CMD_REMOTE_WORKDIR}.exitcode" >> "\$NF_DBG" 2>&1 \
@@ -759,9 +782,37 @@ fi
 
 log "step 4: run \$_task_script (effective PATH: \$PATH)"
 unset NXF_CHDIR 2>/dev/null
-bash "\$_task_script"
+# Capture .command.run's own stderr rather than letting it vanish.
+#
+# Nextflow redirects the USER task's output into .command.out/.command.err, so
+# the only thing on .command.run's own stderr is what happens OUTSIDE that
+# redirection — most importantly the stage-in guards, which `exit 1` before the
+# task is ever launched. Those messages used to go nowhere: the Nomad task log
+# showed only this wrapper's start/end lines, and .command.err did not exist yet
+# because the failure happened pre-launch. That made every stage-in failure
+# undiagnosable after the fact.
+#
+# Written to a file first and replayed afterwards (no process substitution, so
+# nothing can race the writer — same pattern the stage-in guards use). Nothing is
+# lost by buffering: this stream never carried live task output to begin with.
+_run_err=.nxf-run.stderr
+: > "\$_run_err"
+bash "\$_task_script" 2> "\$_run_err"
 _exit_code=\$?
+# → the Nomad task log (nf-task.stderr.N), and → the debug log the trap always pushes.
+cat "\$_run_err" >&2 || true
+{ echo "--- .command.run stderr (exit \$_exit_code) ---"; cat "\$_run_err"; } >> "\$NF_DBG" 2>&1 || true
 log "  task exited with \$_exit_code"
+
+# Fold the task's own stdout/stderr into the debug log too. The trap pushes
+# \$NF_DBG unconditionally, so these survive even when the task dies before the
+# recursive push-back completes — previously Nextflow just reported
+# NoSuchFileException on .command.out and there was nothing to look at.
+for _f in .command.err .command.out; do
+  if [ -s "\$_f" ]; then
+    { echo "--- tail -n 200 \$_f ---"; tail -n 200 "\$_f"; } >> "\$NF_DBG" 2>&1 || true
+  fi
+done
 
 log "step 5: task exit captured (\$_exit_code); .exitcode is written + pushed LAST by the trap"
 echo "[nf-task] end session=\$\${NF_SESSION_ID:--} head_job=\$\${NF_HEAD_JOB_ID:--} process=\$\${NF_PROCESS_NAME:--} task=\$\${NF_TASK_HASH:--} exit=\$_exit_code" >&2

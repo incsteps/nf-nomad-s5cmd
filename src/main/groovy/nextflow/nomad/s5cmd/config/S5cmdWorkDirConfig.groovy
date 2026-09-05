@@ -61,6 +61,17 @@ class S5cmdWorkDirConfig {
      */
     boolean cleanupRemoteInputs = true
 
+    /**
+     * Opt back in to the pre-0.1.8 end-of-run wildcard sweep
+     * ({@code s5cmd rm <root>*&#47;inputs/*}).
+     *
+     * <p>Off by default and deliberately hard to reach: the wildcard is scoped to
+     * the work-dir root, not to the run, so it deletes the staged inputs of any
+     * other pipeline sharing that bucket+prefix. Input reclamation is now done
+     * per task by each task's own EXIT trap — see {@code cleanupRemoteInputs}.</p>
+     */
+    boolean legacyEndOfRunInputSweep = false
+
     static S5cmdWorkDirConfig fromMap(Map<String, Object> map) {
         def cfg = new S5cmdWorkDirConfig()
         if( map == null ) return cfg
@@ -69,6 +80,7 @@ class S5cmdWorkDirConfig {
         if( map.containsKey('prefix') )  cfg.prefix  = ((String) map.prefix)?.trim() ?: null
         if( map.containsKey('cleanupLocal') ) cfg.cleanupLocal = (boolean) map.cleanupLocal
         if( map.containsKey('cleanupRemoteInputs') ) cfg.cleanupRemoteInputs = (boolean) map.cleanupRemoteInputs
+        if( map.containsKey('legacyEndOfRunInputSweep') ) cfg.legacyEndOfRunInputSweep = (boolean) map.legacyEndOfRunInputSweep
         if( map.containsKey('completionTimeout') ) {
             cfg.completionTimeout = Duration.of(map.completionTimeout.toString())
         }

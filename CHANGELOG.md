@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+### Fixed — a finishing run deleted a concurrent run's staged inputs
+`onFlowComplete` ran `s5cmd rm '<workDir root>*/inputs/*'`. That root is the
+configured bucket+prefix, **not** a per-session path, so every run writes task dirs
+under it. Whichever run finished first therefore deleted the staged `inputs/` of any
+pipeline still executing against the same prefix; those tasks then failed stage-in on
+an input that existed moments earlier. **Fix:** each task now reclaims only its own
+`inputs/` dir, in its own EXIT trap, anchored to `$NXF_S5CMD_REMOTE_WORKDIR`, after
+its outputs are pushed — and only when it **succeeded**, so a failed task's inputs
+survive as evidence. Space is also freed as tasks finish rather than at end of run.
+The old sweep survives as `workDir.legacyEndOfRunInputSweep` (default `false`), which
+warns about its blast radius before running.
+
+### Fixed — stage-in failures were undiagnosable after the fact
+A failing `SELECT_*` task left nothing to look at: the stage-in guard's message never
+reached the Nomad task log, `.command.err` did not exist because the failure happened
+before the task launched, and the wildcard sweep had already removed the inputs.
+**Fix:** the bootstrap captures `.command.run`'s stderr and replays it both to the
+worker's stderr (so it lands in `nf-task.stderr.N`) and into `.nxf-debug.log`, which
+the EXIT trap pushes back unconditionally. `.command.err` / `.command.out` are tailed
+into the same log when they exist. Diagnostics only — no change to staging behaviour.
+
+### Added — `workDir.cleanupRemoteInputs` documented, `legacyEndOfRunInputSweep` added
+`cleanupRemoteInputs = false` (already present, previously undocumented) keeps every
+task's staged `inputs/` for a debugging run. See "Debugging a stage-in failure" in the
+README.
+
+
 ## 0.1.7
 
 ### Fixed — large same-bucket S3 inputs failed staging with `IncompleteBody`

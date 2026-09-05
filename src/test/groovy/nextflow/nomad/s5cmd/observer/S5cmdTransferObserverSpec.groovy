@@ -141,4 +141,42 @@ class S5cmdTransferObserverSpec extends Specification {
         then:
         appender.list.empty
     }
+    // ── the end-of-run wildcard sweep is no longer the default ──────────────────
+    // `s5cmd rm <root>*/inputs/*` is scoped to the configured work-dir root, which
+    // is NOT session-scoped. A finishing run therefore deleted the staged inputs of
+    // any pipeline still executing against the same bucket+prefix, whose tasks then
+    // failed stage-in on a missing input. Reclamation is now per task.
+
+    def 'onFlowComplete does not run the run-spanning wildcard sweep by default'() {
+        given:
+        def observer = new S5cmdTransferObserver()
+        observer.onFlowCreate(sessionWith(s5cmd: [
+            enabled: true,
+            workDir: [enabled: true, bucket: 's3://nextflow-work/', prefix: 'pipelines/'],
+        ]))
+
+        when:
+        observer.onFlowComplete()
+
+        then: 'no warning about the destructive wildcard, because it never ran'
+        !messagesAtLevel(Level.WARN).any { it.contains('legacyEndOfRunInputSweep') }
+    }
+
+    def 'the legacy wildcard sweep is opt-in and warns that it crosses runs'() {
+        given:
+        def observer = new S5cmdTransferObserver()
+        observer.onFlowCreate(sessionWith(s5cmd: [
+            enabled: true,
+            workDir: [enabled: true, bucket: 's3://nextflow-work/', prefix: 'pipelines/',
+                      legacyEndOfRunInputSweep: true],
+        ]))
+
+        when:
+        observer.onFlowComplete()
+
+        then: 'the operator is told what the wildcard will reach before it is used'
+        def warns = messagesAtLevel(Level.WARN)
+        warns.any { it.contains('legacyEndOfRunInputSweep=true') && it.contains('other pipeline') }
+    }
+
 }

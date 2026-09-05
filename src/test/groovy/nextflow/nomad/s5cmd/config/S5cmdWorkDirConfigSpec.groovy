@@ -127,4 +127,15 @@ class S5cmdWorkDirConfigSpec extends Specification {
         where:
         scheme << ['s3://', 's3a://']
     }
+    def 'legacyEndOfRunInputSweep defaults to false and is parsed when supplied'() {
+        expect: 'off by default — the wildcard it enables spans every run sharing the prefix'
+        !new S5cmdWorkDirConfig().legacyEndOfRunInputSweep
+
+        and:
+        S5cmdWorkDirConfig.fromMap([legacyEndOfRunInputSweep: true]).legacyEndOfRunInputSweep
+
+        and: 'per-task reclaim stays on by default'
+        new S5cmdWorkDirConfig().cleanupRemoteInputs
+    }
+
 }

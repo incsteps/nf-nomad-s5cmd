@@ -253,7 +253,8 @@ After either run:
 | `nomad.s5cmd.workDir.prefix` | — | Optional path prefix under the bucket |
 | `nomad.s5cmd.workDir.completionTimeout` | `60s` | Max wait for remote `.exitcode` |
 | `nomad.s5cmd.workDir.cleanupLocal` | `true` | After each task, delete the staged **input** copies from node-local scratch — see [Reclaiming space](#reclaiming-space-node-local-and-s3) |
-| `nomad.s5cmd.workDir.cleanupRemoteInputs` | `true` | At end of run, sweep the per-task `inputs/` prefixes from the S3 work dir |
+| `nomad.s5cmd.workDir.cleanupRemoteInputs` | `true` | After each task, reclaim that task's own `inputs/` prefix from the S3 work dir — see [Reclaiming space](#reclaiming-space-node-local-and-s3) |
+| `nomad.s5cmd.workDir.legacyEndOfRunInputSweep` | `false` | Restore the pre-0.1.8 end-of-run `s5cmd rm <root>*/inputs/*`. **Not run-scoped** — it deletes the staged inputs of any other pipeline sharing the bucket+prefix. Prefer the per-task reclaim |
 
 ## Reclaiming space: node-local and S3
 
@@ -261,7 +262,7 @@ In distributed-workdir mode every task's inputs are written twice — once to th
 per-task `inputs/` prefix on S3 by the head, and once to node-local scratch by the
 worker staging them in. Neither copy is needed after the task exits, and on a long
 run with large reference data both accumulate faster than anything reclaims them.
-Two cleanup steps run by default.
+Two cleanup steps run by default, both scoped to a single task.
 
 **After each task, on the worker (`workDir.cleanupLocal`, default `true`).** Once the
 task's command completes and before outputs are pushed back to S3, the staged input
@@ -274,17 +275,65 @@ Two things are deliberately never removed: **declared outputs**, and the files
 modification staged and published under the same name — is detected and kept, so the
 cleanup cannot delete a result.
 
-**At end of run, against S3 (`workDir.cleanupRemoteInputs`, default `true`).** When
-the session completes, the per-task `inputs/` prefixes are swept from the S3 work dir
-(`s3://<bucket>/<prefix>/*/inputs/*`). Those staged inputs are needed only *during*
-the run — for worker stage-in and for retries — and `-resume` reuses task **outputs**,
-never inputs, so removing them does not compromise a later resumed run.
+**After each task, against S3 (`workDir.cleanupRemoteInputs`, default `true`).** In the
+same EXIT trap, once the task's outputs have been pushed, a **successful** task removes
+its own remote `inputs/` prefix — anchored to that task's `$NXF_S5CMD_REMOTE_WORKDIR`,
+never a wildcard. A task that fails **keeps** its inputs: they are the evidence for why
+it failed, and a little S3 space is cheaper than an undiagnosable run. Those staged inputs are needed only *during* the run, for worker stage-in and
+retries, and `-resume` reuses task **outputs**, never inputs, so removing them does not
+compromise a later resumed run.
 
-The sweep is **best-effort and never fails the run**: a non-zero return (for example
-when there is nothing to remove) is logged as a warning and execution continues.
+Both steps are **best-effort and never fail the task**: a non-zero return (for example
+when there is nothing to remove) is logged and execution continues.
 
 Set either key to `false` to retain the copies — useful when debugging a staging
 problem, where the inputs a task actually received are the evidence you want.
+
+> **Before 0.1.8** the S3 reclaim ran once at end of run, as
+> `s5cmd rm 's3://<bucket>/<prefix>/*/inputs/*'`. That root is the configured
+> bucket+prefix, not a per-session path, so the wildcard matched the task dirs of
+> *every* run sharing it: the first pipeline to finish deleted the staged inputs of
+> any pipeline still executing, which then failed stage-in on inputs that had been
+> present moments earlier. It also erased the evidence needed to diagnose that.
+> `workDir.legacyEndOfRunInputSweep = true` restores the old behaviour and warns
+> about its blast radius; prefer the per-task reclaim.
+
+| `nomad.s5cmd.workDir.cleanupRemoteInputs` | `true` | Reclaim each task's remote `inputs/` in that task's own EXIT trap, after its outputs are pushed. Set `false` to keep every task's staged inputs for debugging |
+| `nomad.s5cmd.workDir.legacyEndOfRunInputSweep` | `false` | Restore the pre-0.1.8 end-of-run `s5cmd rm <root>*/inputs/*`. **Not run-scoped** — it deletes the staged inputs of any other pipeline sharing the bucket+prefix. Prefer the per-task reclaim |
+
+## Debugging a stage-in failure
+
+`.command.run` guards every staged input and `exit 1`s if the file is missing after
+the copy, so a stage-in failure kills the task *before* the user command runs.
+Three places carry the evidence:
+
+1. **The Nomad task log** (`nf-task.stderr.N`) — `.command.run`'s own stderr is
+   captured and replayed here, so the guard's
+   `[nf-nomad-s5cmd] stage-in FAILED for '<name>' …` line and s5cmd's own error
+   are both visible. This is usually the whole answer.
+2. **`.nxf-debug.log`** in the task's remote work dir — pushed back unconditionally
+   by the EXIT trap, even when the task fails. It carries the step log, a directory
+   listing, the same `.command.run` stderr, and a 200-line tail of `.command.err`
+   and `.command.out` when those exist.
+3. **The remote `inputs/` dir** — to keep it, set:
+
+   ```groovy
+   nomad.s5cmd.workDir.cleanupRemoteInputs = false
+   ```
+
+   Otherwise each task removes its own `inputs/` once its outputs are pushed.
+
+Note that a pre-launch stage-in failure produces **no** `.command.out` /
+`.command.err` at all — Nextflow creates those only when it launches the task — so
+`NoSuchFileException: …/.command.out` in the head log is a symptom of failing early,
+not of a lost file. Look at (1) and (2).
+
+### Running more than one pipeline against the same bucket + prefix
+
+Safe by default. Each task reclaims only its own `inputs/` dir. Do **not** enable
+`legacyEndOfRunInputSweep`: its wildcard spans the whole work-dir root, so the first
+run to finish deletes the staged inputs of every run still executing under that
+prefix, and those runs then fail stage-in on inputs that were present moments before.
 
 ## Requirements
 

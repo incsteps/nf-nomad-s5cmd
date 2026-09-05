@@ -59,22 +59,46 @@ class S5cmdTransferObserver implements TraceObserverV2 {
     void onFlowComplete() {
         if( !config?.enabled ) return
         log.debug('nf-nomad-s5cmd: session complete')
-        sweepRemoteInputs()
+        warnIfLegacySweepRequested()
     }
 
     /**
-     * End-of-run reclamation: delete the per-task {@code inputs/} dirs from the S3
-     * work dir. Those staged inputs were needed only DURING the run (worker
-     * stage-in + retries); {@code -resume} reuses task OUTPUTS, never inputs, so
-     * removing them is safe and frees S3 space. Best-effort — never fails the run.
+     * The staged {@code inputs/} dirs are reclaimed per task, by each task's own
+     * EXIT trap, against that task's own {@code NXF_S5CMD_REMOTE_WORKDIR}
+     * (see {@code S5cmdNomadInterop.bootstrapScript}). Controlled by
+     * {@code nomad.s5cmd.workDir.cleanupRemoteInputs} — set it to {@code false}
+     * to keep every task's inputs for debugging.
+     *
+     * <p>This method used to run, at end of run:</p>
+     *
+     * <pre>s5cmd rm 's3://&lt;bucket&gt;/&lt;prefix&gt;/*&#47;inputs/*'</pre>
+     *
+     * <p>That wildcard was scoped to the configured work-dir root, which is NOT
+     * session-scoped: every run sharing a bucket+prefix writes task dirs under it.
+     * A run reaching {@code onFlowComplete} therefore deleted the staged inputs of
+     * any pipeline still executing against the same prefix, whose tasks then failed
+     * stage-in with a missing input — and the wildcard also erased the forensic
+     * state needed to diagnose that. It additionally held every task's inputs for
+     * the whole run instead of freeing them as tasks finished.</p>
+     *
+     * <p>Superseded by the per-task reclaim; kept only as an explicit, warned
+     * opt-in for anyone who relied on the old sweep.</p>
      */
-    protected void sweepRemoteInputs() {
-        if( !config.workDir.enabled || !config.workDir.cleanupRemoteInputs ) return
+    protected void warnIfLegacySweepRequested() {
+        if( !config.workDir.enabled ) return
+        if( !config.workDir.legacyEndOfRunInputSweep ) return
         String root = config.workDir.rootUrl()
         if( !root ) return
+        log.warn("nf-nomad-s5cmd: legacyEndOfRunInputSweep=true — deleting ${root}*/inputs/* . " +
+                 'This wildcard is NOT scoped to this run and will delete the staged inputs of any ' +
+                 'other pipeline using the same bucket+prefix. Prefer the default per-task reclaim.')
+        sweepRemoteInputs(root)
+    }
+
+    /** Best-effort legacy wildcard sweep — never fails the run. */
+    protected void sweepRemoteInputs(String root) {
         try {
             S5cmdCommandBuilder b = new S5cmdCommandBuilder(config)
-            // Matches s3://<bucket>/<prefix>/<NN>/<HASH>/inputs/<...> across the session.
             String cmd = b.buildRemove(root + '*/inputs/*')
             String exports = b.envExports()
             String full = exports ? (exports + '\n' + cmd) : cmd

@@ -702,4 +702,87 @@ class S5cmdNomadInteropSpec extends Specification {
         and: 'no s3:// source appears for a purely local input'
         s3ToS3Copies(interop.shellCalls).isEmpty()
     }
+    // ── stage-in observability + scoped input reclaim (0.1.8 regression report) ──
+    // A campaign run lost every SELECT_* task to a stage-in failure that could not be
+    // diagnosed afterwards: the guard's message never reached the Nomad task log,
+    // .command.err did not exist because the failure was pre-launch, and the
+    // end-of-run wildcard sweep had erased the staged inputs.
+
+    def 'bootstrap captures .command.run stderr and replays it to the task log and debug log'() {
+        given:
+        Path sessionDir = tempDir.resolve('sess')
+        Path workDir = makeNfTask(sessionDir)
+        def interop = new StubInterop(mockTaskAt(workDir), enabledSession(), sessionDir)
+
+        when:
+        interop.prepare()
+        String script = interop.submitCommand[2]
+
+        then: 'stderr is captured to a file rather than discarded'
+        script.contains('bash "$_task_script" 2> "$_run_err"')
+
+        and: 'replayed to the wrapper stderr, which is what Nomad records'
+        script.contains('cat "$_run_err" >&2')
+
+        and: 'and into the debug log, which the EXIT trap pushes unconditionally'
+        script.contains('.command.run stderr')
+
+        and: 'the exit code is still the task\'s own, not the replay\'s'
+        script.contains('bash "$_task_script" 2> "$_run_err"\n_exit_code=$?')
+    }
+
+    def 'bootstrap folds .command.err and .command.out into the pushed-back debug log'() {
+        given:
+        Path sessionDir = tempDir.resolve('sess')
+        Path workDir = makeNfTask(sessionDir)
+        def interop = new StubInterop(mockTaskAt(workDir), enabledSession(), sessionDir)
+
+        when:
+        interop.prepare()
+        String script = interop.submitCommand[2]
+
+        then: 'both are tailed into the debug log so they survive a failed push-back'
+        script.contains('for _f in .command.err .command.out; do')
+        script.contains('tail -n 200')
+    }
+
+    def 'bootstrap reclaims only THIS task\'s remote inputs, never a bucket-wide wildcard'() {
+        given:
+        Path sessionDir = tempDir.resolve('sess')
+        Path workDir = makeNfTask(sessionDir)
+        def interop = new StubInterop(mockTaskAt(workDir), enabledSession(), sessionDir)
+
+        when:
+        interop.prepare()
+        String script = interop.submitCommand[2]
+
+        then: 'the rm is anchored to this task\'s own remote workdir'
+        script.contains('rm "$${NXF_S5CMD_REMOTE_WORKDIR}inputs/*"')
+
+        and: 'gated on the cleanup flag so a debugging run can keep its inputs'
+        script.contains('"$${NXF_S5CMD_CLEANUP_INPUTS:-0}" = "1"')
+
+        and: 'a failed task keeps its inputs — they are the evidence for the failure'
+        script.contains('"$${_exit_code:-1}" = "0"')
+        script.contains('KEEPING remote inputs/ for diagnosis')
+
+        and: 'regression guard: no run-spanning wildcard anywhere in the worker script'
+        // `<root>*/inputs/*` matches every task dir under the configured prefix,
+        // including those of a pipeline still running against the same bucket.
+        !script.contains('*/inputs/*')
+    }
+
+    def 'submitEnv carries the input-cleanup flag reflecting workDir.cleanupRemoteInputs'() {
+        given:
+        Path sessionDir = tempDir.resolve('sess')
+        Path workDir = makeNfTask(sessionDir)
+        def interop = new StubInterop(mockTaskAt(workDir), enabledSession(), sessionDir)
+
+        when:
+        def env = interop.buildTransferEnv()
+
+        then: 'enabled by default'
+        env.get('NXF_S5CMD_CLEANUP_INPUTS') == '1'
+    }
+
 }

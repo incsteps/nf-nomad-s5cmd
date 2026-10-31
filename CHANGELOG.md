@@ -1,6 +1,26 @@
 # Changelog
 
-## Unreleased
+## 0.1.10
+
+### Fixed — the `.command.run` path rewrite was a no-op under mawk 1.3.3
+Step 3 of the worker bootstrap rewrites absolute work-dir paths in `.command.run`
+with `gsub`. It used the POSIX class `[[:space:]]`. mawk 1.3.3 — Debian's default
+awk, and the awk in many biocontainers images — has no POSIX classes, so the
+rewrite silently did nothing. Most tasks survived; a task whose launcher re-invokes
+`.command.run` by absolute path (any non-bash shebang template) died with
+`No such file or directory`. **Fix:** the pattern is `[^ \t]`, accepted by mawk
+1.3.3, busybox awk and mawk 1.3.4. The rewrite is now verified with a fixed-string
+grep for the task's own work dir, deliberately not with the same regex, and a
+surviving absolute path is a FATAL instead of a later "No such file".
+
+### Fixed — `AWS_SECRET_ACCESS_KEY` appeared in failure messages
+Three head-side failure paths echoed the whole s5cmd cmdline, including the
+credential exports, into the exception and therefore into Nextflow's error output
+and the head log. The secret (and `AWS_SESSION_TOKEN`) is now redacted line by
+line; the access key id stays visible.
+
+
+## 0.1.9
 
 ### Fixed — a finishing run deleted a concurrent run's staged inputs
 `onFlowComplete` ran `s5cmd rm '<workDir root>*/inputs/*'`. That root is the

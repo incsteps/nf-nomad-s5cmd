@@ -757,16 +757,27 @@ log "step 3: patch absolute paths in .command.run"
 if [ -f .command.run ]; then
   awk '
     {
-      gsub(/\\/[^[:space:]]*\\/\\.command\\.run/, ".command.run")
-      gsub(/\\/[^[:space:]]*\\/\\.command\\.sh/, ".command.sh")
-      gsub(/\\/[^[:space:]]*\\/\\.command\\.begin/, ".command.begin")
-      gsub(/\\/[^[:space:]]*\\/\\.command\\.trace/, ".command.trace")
-      gsub(/\\/[^[:space:]]*\\/\\.exitcode/, ".exitcode")
+      gsub(/\\/[^ \\t]*\\/\\.command\\.run/, ".command.run")
+      gsub(/\\/[^ \\t]*\\/\\.command\\.sh/, ".command.sh")
+      gsub(/\\/[^ \\t]*\\/\\.command\\.begin/, ".command.begin")
+      gsub(/\\/[^ \\t]*\\/\\.command\\.trace/, ".command.trace")
+      gsub(/\\/[^ \\t]*\\/\\.exitcode/, ".exitcode")
       print
     }
   ' .command.run > .command.run.patched && mv .command.run.patched .command.run
   chmod 755 .command.run 2>/dev/null
   log "  .command.run patched (size now \$(wc -c < .command.run) bytes)"
+  # Verify the rewrite with a fixed-string search for this task's own work
+  # dir, deliberately NOT with the regex above: if the container's awk cannot
+  # run that regex (mawk 1.3.3 had no POSIX classes, and silently matched
+  # nothing), re-checking with the same regex in the same awk would pass too.
+  # An S3 work dir appears in .command.run as /<bucket>/<key>/.
+  _abs_wd="/\$\${NXF_S5CMD_REMOTE_WORKDIR#s3://}"
+  if [ -n "\$\${NXF_S5CMD_REMOTE_WORKDIR:-}" ] && grep -qF "\$\${_abs_wd}.command" .command.run; then
+    log "  FATAL: absolute work-dir paths survived the rewrite (\$\${_abs_wd}); awk: \$(awk -W version 2>&1 | head -1)"
+    echo "[nf-task] FATAL: .command.run still references \$\${_abs_wd}, which does not exist in this container" >&2
+    exit 1
+  fi
 else
   log "  no .command.run, will fall back to .command.sh"
 fi

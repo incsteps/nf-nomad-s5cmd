@@ -757,16 +757,27 @@ log "step 3: patch absolute paths in .command.run"
 if [ -f .command.run ]; then
   awk '
     {
-      gsub(/\\/[^[:space:]]*\\/\\.command\\.run/, ".command.run")
-      gsub(/\\/[^[:space:]]*\\/\\.command\\.sh/, ".command.sh")
-      gsub(/\\/[^[:space:]]*\\/\\.command\\.begin/, ".command.begin")
-      gsub(/\\/[^[:space:]]*\\/\\.command\\.trace/, ".command.trace")
-      gsub(/\\/[^[:space:]]*\\/\\.exitcode/, ".exitcode")
+      gsub(/\\/[^ \\t]*\\/\\.command\\.run/, ".command.run")
+      gsub(/\\/[^ \\t]*\\/\\.command\\.sh/, ".command.sh")
+      gsub(/\\/[^ \\t]*\\/\\.command\\.begin/, ".command.begin")
+      gsub(/\\/[^ \\t]*\\/\\.command\\.trace/, ".command.trace")
+      gsub(/\\/[^ \\t]*\\/\\.exitcode/, ".exitcode")
       print
     }
   ' .command.run > .command.run.patched && mv .command.run.patched .command.run
   chmod 755 .command.run 2>/dev/null
   log "  .command.run patched (size now \$(wc -c < .command.run) bytes)"
+  # Verify the rewrite with a fixed-string search for this task's own work
+  # dir, deliberately NOT with the regex above: if the container's awk cannot
+  # run that regex (mawk 1.3.3 had no POSIX classes, and silently matched
+  # nothing), re-checking with the same regex in the same awk would pass too.
+  # An S3 work dir appears in .command.run as /<bucket>/<key>/.
+  _abs_wd="/\$\${NXF_S5CMD_REMOTE_WORKDIR#s3://}"
+  if [ -n "\$\${NXF_S5CMD_REMOTE_WORKDIR:-}" ] && grep -qF "\$\${_abs_wd}.command" .command.run; then
+    log "  FATAL: absolute work-dir paths survived the rewrite (\$\${_abs_wd}); awk: \$(awk -W version 2>&1 | head -1)"
+    echo "[nf-task] FATAL: .command.run still references \$\${_abs_wd}, which does not exist in this container" >&2
+    exit 1
+  fi
 else
   log "  no .command.run, will fall back to .command.sh"
 fi
@@ -883,6 +894,19 @@ exit "\$_exit_code"
         return exports + '\n' + cmdline
     }
 
+    /**
+     * Commands are run with {@link #prefixWithEnvExports} prepended, so the
+     * cmdline carries {@code export AWS_SECRET_ACCESS_KEY='...'}. Echoing it into
+     * an exception put the secret into Nextflow's error output and the head log.
+     * Each export is emitted on its own line, so redact by line rather than by
+     * parsing shell quoting. The access key id is left visible: it identifies
+     * which credential was used, which is what a failed copy needs to diagnose.
+     */
+    protected static String redactSecrets(String cmdline) {
+        if( !cmdline ) return cmdline
+        return cmdline.replaceAll(/(?m)^(\s*export\s+(?:AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN)=).*$/, '$1<redacted>')
+    }
+
     protected void runShell(String cmdline) {
         Process proc = ['bash', '-c', cmdline].execute()
         StringBuffer out = new StringBuffer()
@@ -891,7 +915,7 @@ exit "\$_exit_code"
         proc.waitFor()
         if( proc.exitValue() != 0 ) {
             throw new ProcessSubmitException(
-                "[NOMAD] nf-nomad-s5cmd command failed (rc=${proc.exitValue()}): ${cmdline}\n${err}")
+                "[NOMAD] nf-nomad-s5cmd command failed (rc=${proc.exitValue()}): ${redactSecrets(cmdline)}\n${err}")
         }
     }
 
@@ -928,14 +952,14 @@ exit "\$_exit_code"
         proc.waitFor()
         if( proc.exitValue() != 0 ) {
             throw new ProcessSubmitException(
-                "[NOMAD] nf-nomad-s5cmd command failed (rc=${proc.exitValue()}): ${cmdline}\n${err}")
+                "[NOMAD] nf-nomad-s5cmd command failed (rc=${proc.exitValue()}): ${redactSecrets(cmdline)}\n${err}")
         }
         String combined = out.toString() + '\n' + err.toString()
         if( reportsPerFileFailure(combined) ) {
             throw new ProcessSubmitException(
                 "[NOMAD] nf-nomad-s5cmd reported a per-file ERROR/IncompleteBody while exiting rc=0 — " +
                 "the artifact set is INCOMPLETE, so the task is failed rather than finalised with a " +
-                "success code over missing outputs: ${cmdline}\n${combined}")
+                "success code over missing outputs: ${redactSecrets(cmdline)}\n${combined}")
         }
     }
 

@@ -894,6 +894,19 @@ exit "\$_exit_code"
         return exports + '\n' + cmdline
     }
 
+    /**
+     * Commands are run with {@link #prefixWithEnvExports} prepended, so the
+     * cmdline carries {@code export AWS_SECRET_ACCESS_KEY='...'}. Echoing it into
+     * an exception put the secret into Nextflow's error output and the head log.
+     * Each export is emitted on its own line, so redact by line rather than by
+     * parsing shell quoting. The access key id is left visible: it identifies
+     * which credential was used, which is what a failed copy needs to diagnose.
+     */
+    protected static String redactSecrets(String cmdline) {
+        if( !cmdline ) return cmdline
+        return cmdline.replaceAll(/(?m)^(\s*export\s+(?:AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN)=).*$/, '$1<redacted>')
+    }
+
     protected void runShell(String cmdline) {
         Process proc = ['bash', '-c', cmdline].execute()
         StringBuffer out = new StringBuffer()
@@ -902,7 +915,7 @@ exit "\$_exit_code"
         proc.waitFor()
         if( proc.exitValue() != 0 ) {
             throw new ProcessSubmitException(
-                "[NOMAD] nf-nomad-s5cmd command failed (rc=${proc.exitValue()}): ${cmdline}\n${err}")
+                "[NOMAD] nf-nomad-s5cmd command failed (rc=${proc.exitValue()}): ${redactSecrets(cmdline)}\n${err}")
         }
     }
 
@@ -939,14 +952,14 @@ exit "\$_exit_code"
         proc.waitFor()
         if( proc.exitValue() != 0 ) {
             throw new ProcessSubmitException(
-                "[NOMAD] nf-nomad-s5cmd command failed (rc=${proc.exitValue()}): ${cmdline}\n${err}")
+                "[NOMAD] nf-nomad-s5cmd command failed (rc=${proc.exitValue()}): ${redactSecrets(cmdline)}\n${err}")
         }
         String combined = out.toString() + '\n' + err.toString()
         if( reportsPerFileFailure(combined) ) {
             throw new ProcessSubmitException(
                 "[NOMAD] nf-nomad-s5cmd reported a per-file ERROR/IncompleteBody while exiting rc=0 — " +
                 "the artifact set is INCOMPLETE, so the task is failed rather than finalised with a " +
-                "success code over missing outputs: ${cmdline}\n${combined}")
+                "success code over missing outputs: ${redactSecrets(cmdline)}\n${combined}")
         }
     }
 
